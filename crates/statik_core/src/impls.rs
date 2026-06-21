@@ -82,6 +82,20 @@ impl Encode for i128 {
     }
 }
 
+// floats \\
+
+impl Encode for f32 {
+    fn encode(&self, mut buffer: impl Write) -> Result<()> {
+        Ok(buffer.write_f32::<BigEndian>(*self)?)
+    }
+}
+
+impl Encode for f64 {
+    fn encode(&self, mut buffer: impl Write) -> Result<()> {
+        Ok(buffer.write_f64::<BigEndian>(*self)?)
+    }
+}
+
 // Miscellaneous \\
 
 impl Encode for String {
@@ -230,6 +244,20 @@ impl Decode for i64 {
 impl Decode for i128 {
     fn decode(mut buffer: impl Read) -> Result<Self> {
         Ok(buffer.read_i128::<BigEndian>()?)
+    }
+}
+
+// floats \\
+
+impl Decode for f32 {
+    fn decode(mut buffer: impl Read) -> Result<Self> {
+        Ok(buffer.read_f32::<BigEndian>()?)
+    }
+}
+
+impl Decode for f64 {
+    fn decode(mut buffer: impl Read) -> Result<Self> {
+        Ok(buffer.read_f64::<BigEndian>()?)
     }
 }
 

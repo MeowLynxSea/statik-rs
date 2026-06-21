@@ -2,7 +2,7 @@
 * [ ] add the api, accepting requests ( if authenticated ) to disconnect, change config, ect
 * [x] create a DockerFile, compiling it with github actions
 * [ ] make config a shared state rather than awkwardly cloning its handle.
-* [ ] (maybe) accept play packets for a very minimal lobby area where players can build
+* [x] (maybe) accept play packets for a very minimal lobby area where players can build
 * [ ] allow downloading the icon from the internet, downscaling it
 * [ ] send queries to the minecraft api to check uuid's and player names
 * [ ] add a whitelist of players that can join

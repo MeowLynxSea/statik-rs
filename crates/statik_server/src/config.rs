@@ -6,6 +6,8 @@ pub struct ServerConfig {
     pub general: GeneralServerConfig,
     pub mc: McServerConfig,
     pub api: ApiServerConfig,
+    pub limbo: LimboConfig,
+    pub compression: CompressionConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,6 +120,74 @@ impl Default for ApiServerConfig {
         Self {
             port: 8080,
             token: None,
+        }
+    }
+}
+
+/// Configuration for the limbo world clients are placed into after login.
+///
+/// Limbo is unconditional: every successful `LoginStart` transitions the
+/// client into Play state at the configured position in an empty void world.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LimboConfig {
+    /// Fixed spawn / locked position (block coordinates, x/y/z). Players can
+    /// look around but `isFlying=true` and the single `Synchronize Player
+    /// Position` packet sent on login prevent them from leaving this point.
+    pub position: [f64; 3],
+
+    /// Game mode: 0 = survival, 1 = creative, 2 = adventure, 3 = spectator.
+    /// Sent as the `gameType` field of the Login packet.
+    pub gamemode: i32,
+
+    /// Chunk view distance in chunks (radius). Sent via Set Chunk Cache
+    /// Radius (0x4F). 8 = reasonable default; max 32 in vanilla.
+    pub view_distance: i32,
+
+    /// Simulation distance in chunks. Sent as a field of the Login packet
+    /// (0x28). Must be ≤ `view_distance`.
+    pub simulation_distance: i32,
+
+    /// Dimension name, e.g. `"minecraft:the_void"`. Used as both the
+    /// `dimension` and `dimensionType` fields of the Login packet.
+    pub dimension: String,
+}
+
+impl Default for LimboConfig {
+    fn default() -> Self {
+        Self {
+            position: [0.5, 64.0, 0.5],
+            gamemode: 1, // creative
+            view_distance: 8,
+            simulation_distance: 8,
+            dimension: "minecraft:the_void".to_string(),
+        }
+    }
+}
+
+/// Configuration for Minecraft packet compression.
+///
+/// When `enabled = true`, the server sends `S2CSetCompression` (Login 0x03)
+/// before `LoginSuccess` and compresses all subsequent packets whose body
+/// length meets `threshold`. When `enabled = false` (the default), packets
+/// are sent uncompressed, matching the original statik behavior.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompressionConfig {
+    /// Whether to enable zlib compression for Minecraft packets.
+    pub enabled: bool,
+
+    /// Compression threshold in bytes. Packets with body length below this
+    /// value are sent uncompressed (with a leading `VarInt(0)` Data Length).
+    /// Vanilla default is 256.
+    pub threshold: i32,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: 256,
         }
     }
 }
