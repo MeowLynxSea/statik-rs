@@ -10,3 +10,5 @@ statik.toml
 /tools
 
 *.code-workspace
+
+tmp/
