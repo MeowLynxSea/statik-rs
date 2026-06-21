@@ -78,11 +78,11 @@ async fn main() -> Result<()> {
         // .with_thread_names(true)
         .init();
 
-    // Install the `log` -> `tracing` bridge so that the `log` macros
-    // re-exported via `statik_core::prelude` (used throughout the server
-    // crate) are emitted by the tracing fmt subscriber above. Without this,
-    // those records are silently dropped.
-    tracing_log::LogTracer::init()?;
+    // `tracing-subscriber`'s `try_init()` (called by `.init()` above) already
+    // installs a `tracing_log::LogTracer` via the new `tracing-log` API — see
+    // `tracing-subscriber/src/util.rs`. Calling `LogTracer::init()` again here
+    // would fail with "attempted to set a logger after the logging system was
+    // already initialized", so we rely on the auto-installed bridge instead.
 
     info!("Statik server is starting.");
 

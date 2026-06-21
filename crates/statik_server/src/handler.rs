@@ -57,15 +57,18 @@ impl Handler {
             tokio::select! {
                 res = self.connection.handle_connection() => {
                     if let Err(e) = res {
-                        warn!("{e:?}");
-
-                        // EOF can happen if the client disconnects while
-                        // joining, which isn't very erroneous.
+                        // Client cleanly closing the TCP connection (e.g. after
+                        // we send a disconnect packet) surfaces as
+                        // UnexpectedEof from `read_buf`. That's the expected
+                        // end of a connection, not a warning.
                         if let Some(er) = e.downcast_ref::<io::Error>() {
                             if er.kind() == io::ErrorKind::UnexpectedEof {
+                                debug!("client closed connection cleanly");
                                 return Ok(());
                             }
                         }
+
+                        warn!("connection ended with error: {e:#}");
                         return Err(anyhow!("connection ended with error: {e:#}"));
                     }
 

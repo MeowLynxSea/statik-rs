@@ -11,8 +11,5 @@ pub struct C2SStatusRequest {}
 pub struct C2SPing {
     /// May be any number. Notchian clients use a system-dependent time value
     /// which is counted in milliseconds.
-    ///
-    /// This is technically a signed integer, but doesn't matter for this
-    /// packet.
-    pub payload: u64,
+    pub payload: i64,
 }

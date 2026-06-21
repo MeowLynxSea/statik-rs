@@ -18,9 +18,6 @@ resolver = "2"
 [dependencies]
 
 tracing-subscriber = "0.3.17"
-# Bridges the `log` macros (re-exported via statik_core's prelude) into
-# `tracing` events so server-crate log records reach the fmt subscriber.
-tracing-log = "0.1.3"
 #CLI parsing#
 clap = { version ="4.2.7", features = ["derive"] }
 toml = "0.7.3"

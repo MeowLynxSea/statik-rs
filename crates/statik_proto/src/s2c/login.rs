@@ -22,12 +22,27 @@ pub struct S2CEncryptionRequest {
 
 use uuid::Uuid;
 
+/// One signed property entry on a [`S2CLoginSuccess`] game profile.
+///
+/// See Mojang's `com.mojang.authlib.properties.Property` and
+/// [wiki.vg](https://wiki.vg/Protocol#Game_Profile). `signature` is `None`
+/// for unsigned properties (a `"SignedProperty"` absent the signature half).
+#[derive(Debug, Encode, Decode)]
+pub struct Property {
+    /// Property name, e.g. `"textures"`.
+    pub name: String,
+    /// Property value (base64-encoded payload).
+    pub value: String,
+    /// Optional base64 signature; absent for unsigned properties.
+    pub signature: Option<String>,
+}
+
 #[derive(Debug, Packet)]
 #[packet(id = 0x02, state = State::Login)]
 pub struct S2CLoginSuccess {
     pub uuid: Uuid,
     pub username: String,
-    // pub properties: Property,
+    pub properties: Vec<Property>,
 }
 
 #[derive(Debug, Packet)]

@@ -54,8 +54,11 @@ fn status_request_roundtrip() {
 
 #[test]
 fn ping_roundtrip() {
+    // Use a positive value well within i64::MAX so the round-trip is valid
+    // against a signed wire format. The Minecraft client picks an arbitrary
+    // value; the exact magnitude is not significant.
     let pkt = C2SPing {
-        payload: 0x0123_4567_89ab_cdef,
+        payload: 0x0123_4567_89ab_cdef_i64,
     };
     let buf = encode(&pkt);
 
