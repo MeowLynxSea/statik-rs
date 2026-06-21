@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
-
 pub struct ServerConfig {
     pub general: GeneralServerConfig,
     pub mc: McServerConfig,
@@ -102,10 +101,23 @@ impl Default for McServerConfig {
 pub struct ApiServerConfig {
     /// The port api connections use. Defaults to 8080.
     pub port: usize,
+
+    /// Shared secret used to authenticate api requests. If `None`, the api
+    /// accepts unauthenticated `ping`/`status` requests but refuses
+    /// `shutdown` (and other mutating actions) for safety. If set, every
+    /// request must supply a matching `token` field.
+    ///
+    /// This is intended for a local supervisor process (e.g. one that
+    /// triggers the real minecraft server to start) and is not a substitute
+    /// for transport security — keep the api listener on localhost.
+    pub token: Option<String>,
 }
 
 impl Default for ApiServerConfig {
     fn default() -> Self {
-        Self { port: 8080 }
+        Self {
+            port: 8080,
+            token: None,
+        }
     }
 }

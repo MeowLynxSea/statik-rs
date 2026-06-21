@@ -1,21 +1,14 @@
-use std::{io, sync::Arc};
+use std::io;
 
 use statik_core::prelude::*;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 
-use crate::{
-    config::ServerConfig, connection::Connection, /* player::Player, */ shutdown::Shutdown,
-};
-
-// use tera::{Context, Tera};
+use crate::{connection::Connection, shutdown::Shutdown};
 
 /// Per-connection handler. Reads packets sent from `connection` (a tcp stream
 /// from a minecraft client) and sends responses accordingly.
 #[derive(Debug)]
 pub struct Handler {
-    #[allow(unused)]
-    config: Arc<RwLock<ServerConfig>>,
-
     /// The TCP connection implemented using a buffered `TcpStream` for parsing
     /// minecraft packets.
     ///
@@ -35,101 +28,69 @@ pub struct Handler {
     /// which point the connection is terminated.
     shutdown: Shutdown,
 
-    /// Not used directly. Instead, when `Handler` is dropped, this cloned
-    /// to the shutdown channel is also dropped - all clones must be dropped
-    /// for the server to shutdown, and thus this is a good way of checking
-    /// when all connections have finished/been terminated.
+    /// Not used directly. Instead, when `Handler` is dropped, this clone of the
+    /// shutdown-complete sender is also dropped — all clones must be dropped
+    /// for the server to shut down, so this is how the server detects when all
+    /// connections have finished/been terminated.
     _shutdown_complete: mpsc::Sender<String>,
 }
 
 impl Handler {
     pub async fn new(
-        config: Arc<RwLock<ServerConfig>>,
         connection: Connection,
         shutdown: Shutdown,
         _shutdown_complete: mpsc::Sender<String>,
     ) -> Self {
-        let _config_clone = config.clone();
         Self {
-            config,
-            // player: None,
             connection,
             shutdown,
             _shutdown_complete,
         }
     }
 
-    // #[tracing::instrument(
-    //     name = "Handler::run",
-    //     skip(self),
-    //     fields(
-    //         // `%` serializes the peer IP addr with `Display`
-    //         peer_addr = %self.connection.address
-    //     ),
-    // )]
     pub async fn run(&mut self) -> Result<()> {
         // As long as the shutdown signal has not been received, try to read a
         // new packet.
         while !self.shutdown.is_shutdown() {
-            // While reading a packet, also listen for the shutdown
-            // signal - otherwise on a long job this could hang!
+            // While reading a packet, also listen for the shutdown signal —
+            // otherwise a long-running job could hang forever.
             tokio::select! {
                 res = self.connection.handle_connection() => {
-
                     if let Err(e) = res {
-
                         warn!("{e:?}");
 
-                        // EOF can happen if the client disconnects while joining, which isn't
-                        // very erroneous.
+                        // EOF can happen if the client disconnects while
+                        // joining, which isn't very erroneous.
                         if let Some(er) = e.downcast_ref::<io::Error>() {
-
                             if er.kind() == io::ErrorKind::UnexpectedEof {
-                                // return Err(anyhow!("connection ended due to: {er} (timeout)"));
                                 return Ok(());
                             }
                         }
                         return Err(anyhow!("connection ended with error: {e:#}"));
                     }
 
+                    // `handle_connection` only returns once the peer closes
+                    // the stream or an error occurs, so reaching here is
+                    // unexpected.
                     warn!("shouldn't be possible to be here!");
                 },
-                // If a shutdown signal is received, return from `run`.
-                // This will result in the task terminating.
+
+                // If a shutdown signal is received, return from `run`,
+                // terminating the task. The actual disconnect packet templating
+                // is a future TODO (see TODO.md) — for now we just log.
                 reason = self.shutdown.recv() => {
-
-                    // let template = reason;
-
-                    // let context = if let Ok(context) = Context::from_serialize(/*self.player.clone().unwrap_or_default()*/ Player::default()) { context } else { Context::new() };
-
-                    // let disconnect_msg = match Tera::one_off(&template, &context, false) {
-                    //     Ok(s) => s,
-                    //     Err(e) => {
-                    //         warn!("Sending disconnect template as plain text. Could not parse Tera template: {e}");
-                    //         template
-                    //     }
-                    // };
-
-                    // debug!("Client connection from {} disconnected by server with reason: \"{disconnect_msg}\"", &self.connection.address);
-                    debug!("Client connection from {} disconnected by server with reason: \"{reason}\"", &self.connection.address);
-
-                    //write disconnect packet using disconnect_msg:
-
-                    // let disconnect_packet = S2C
-
-                    // self.connection.write_packet().await?;
-
-                    // return Ok(());
+                    match reason {
+                        Some(r) => debug!(
+                            "Client connection from {} disconnected by server with reason: \"{r}\"",
+                            self.connection.address
+                        ),
+                        None => debug!(
+                            "Client connection from {} disconnected by server (no reason provided).",
+                            self.connection.address
+                        ),
+                    }
                 }
             };
-
-            // //If `None` is returned from `read_packet()` then the peer closed
-            // //the socket. There is no further work to do and the task can be
-            // //terminated.
-            // let packet = match maybe_packet {
-            //     Some(packet) => packet,
-            //     None => return Ok(()),
-            // };
         }
 
         Ok(())

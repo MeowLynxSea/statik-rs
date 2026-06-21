@@ -15,7 +15,10 @@ pub fn derive_packet(item: TokenStream) -> Result<TokenStream> {
     };
 
     let Some(id) = packet_attr.id else {
-        return Err(Error::new(packet_attr.span, "missing `id = ...` value from packet attribute"));
+        return Err(Error::new(
+            packet_attr.span,
+            "missing `id = ...` value from packet attribute",
+        ));
     };
 
     let state = packet_attr

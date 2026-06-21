@@ -1,6 +1,4 @@
-use crate::prelude::*;
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum State {
     Handshake = 0,
     Status = 1,

@@ -1,9 +1,4 @@
-use std::{
-    borrow::Cow,
-    io::{Read, Write},
-};
-
-use crate::prelude::*;
+use std::borrow::Cow;
 
 #[derive(Debug, Default)]
 pub struct RawBytes(pub Cow<'static, [u8]>);

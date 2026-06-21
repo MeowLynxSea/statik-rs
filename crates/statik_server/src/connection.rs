@@ -18,7 +18,6 @@ use tokio::{
 
 use crate::config::ServerConfig;
 
-#[allow(unused)]
 /// Checks if a username COULD be a valid minecraft account's username.
 ///
 /// There is a few possible cases where this won't apply, like the handful
@@ -64,10 +63,9 @@ pub struct Connection {
     /// The buffer for reading frames.
     pub buffer: BytesMut,
 
-    /// Buffer used for queuing and sending bytes.
-    queue: Vec<u8>,
-
-    ///staging
+    /// Scratch buffer used when encoding outbound packets: a packet's body is
+    /// encoded here before being framed with its VarInt length prefix and
+    /// written to the stream.
     staging: Vec<u8>,
 
     /// Current state of the handler: should go from 0 (Handshake) to 1 (status)
@@ -91,86 +89,115 @@ impl Connection {
             stream: BufWriter::new(socket),
             address,
             buffer: BytesMut::with_capacity(max_packet_size),
-            queue: Vec::with_capacity(max_packet_size - 1),
             staging: Vec::with_capacity(max_packet_size),
             state: State::Handshake,
         }
     }
 
-    /// Read a single `Packet` value from the underlying stream.
+    /// Read packets from the underlying stream until the peer closes the
+    /// connection.
     ///
-    /// The function waits until it has retrieved enough data to parse a packet.
-    /// Any data remaining in the read buffer after the packet has been parsed
-    /// is kept there for the next call to `read_packet`.
+    /// The function loops, first draining every complete frame already buffered
+    /// and then reading more bytes when a partial frame is encountered. Any
+    /// data remaining in the read buffer after a packet has been parsed is kept
+    /// there for the next iteration.
     ///
     /// # Returns
     ///
-    /// On success, the received packet is returned. If the `TcpStream`
-    /// is closed in a way that doesn't break a packet in half, it returns
-    /// `None`. Otherwise, an error is returned.
+    /// Returns `Err` if the `TcpStream` is closed (mapped to
+    /// [`io::ErrorKind::UnexpectedEof`]) or a malformed frame is encountered.
+    /// Callers may treat a clean EOF as a normal connection end.
     pub async fn handle_connection(&mut self) -> Result<()> {
         loop {
             trace!("handling connection with {}", self.address);
 
-            if self.buffer.is_empty() {
-                let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
-
-                if bytes_read == 0 {
-                    return Err(io::Error::from(ErrorKind::UnexpectedEof).into());
-                }
-
-                trace!("read {bytes_read} bytes from {}.", self.address);
+            // Drain every complete frame currently buffered. `try_parse_packet`
+            // returns `Ok(None)` when there is not enough data yet for the next
+            // frame, in which case we fall through and read more bytes.
+            while let Some(packet) = self.try_parse_packet()? {
+                self.dispatch_packet(packet).await?;
             }
 
-            self.parse_packet().await?;
+            let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
+
+            if bytes_read == 0 {
+                return Err(io::Error::from(ErrorKind::UnexpectedEof).into());
+            }
+
+            trace!("read {bytes_read} bytes from {}.", self.address);
         }
     }
 
-    /// Tries to parse a frame from the buffer. If the buffer contains enough
-    /// data, the frame is returned and the data removed from the buffer. If not
-    /// enough data has been buffered yet, `Ok(None)` is returned. If the
-    /// buffered data does not represent a valid frame, `Err` is returned.
-    pub async fn parse_packet(&mut self) -> Result<()> {
-        let (offset, length) = {
-            let mut buf = Cursor::new(&self.buffer[..]);
-
-            let length = VarInt::decode(&mut buf)?;
-
-            if self.buffer.len() < length.0 as usize + buf.position() as usize {
-                bail!(
-                    "Packet wasn't long enough!
-                    Packet was {} bytes long while the packet stated it should be {} bytes long.",
-                    self.buffer.len(),
-                    length
-                );
+    /// Attempts to parse a single packet frame from the read buffer without
+    /// blocking.
+    ///
+    /// Returns:
+    /// - `Ok(Some(packet))` when a full frame was buffered; the frame's bytes
+    ///   are consumed from `self.buffer`.
+    /// - `Ok(None)` when the buffer does not yet contain a complete frame
+    ///   (either the length VarInt or the packet body is still partial). The
+    ///   caller should read more bytes and retry.
+    /// - `Err` when the buffered data is malformed (bad VarInt, declared length
+    ///   out of bounds, decode failure).
+    fn try_parse_packet(&mut self) -> Result<Option<C2SPacket>> {
+        // Peek at the leading length VarInt without committing to consuming it.
+        let mut cursor = Cursor::new(&self.buffer[..]);
+        let length = match VarInt::decode(&mut cursor) {
+            Ok(v) => v.0,
+            Err(e) => {
+                // A partial length VarInt surfaces as an UnexpectedEof from
+                // `read_u8`; that just means we need more bytes, not an error.
+                if let Some(io_err) = e.downcast_ref::<io::Error>() {
+                    if io_err.kind() == ErrorKind::UnexpectedEof {
+                        return Ok(None);
+                    }
+                }
+                return Err(e);
             }
-
-            (buf.position() as usize, length.0 as usize)
         };
 
-        self.buffer.advance(offset);
+        ensure!(
+            length >= 0,
+            "packet length must be non-negative, got {length}"
+        );
+        ensure!(
+            length as usize <= MAX_PACKET_SIZE as usize,
+            "declared packet length {length} exceeds MAX_PACKET_SIZE ({})",
+            MAX_PACKET_SIZE
+        );
 
-        // Cursor is used to track the "current" location in the
-        // buffer. Cursor also implements `Buf` from the `bytes` crate
-        // which provides a number of helpful utilities for working
-        // with bytes.
-        let mut buf = Cursor::new(&self.buffer[..length]);
+        let header_len = cursor.position() as usize;
+        let length = length as usize;
 
-        let packet = C2SPacket::decode(&mut buf)?;
-        debug!("(↓) packet recieved: {:?}", &packet);
-
-        match self.state {
-            State::Handshake => {println!("hand"); self.handle_handshake(packet).await?},
-
-            State::Status => {println!("here");self.handle_status(packet).await?},
-
-            State::Login => self.handle_login(packet).await?,
-            State::Play => unimplemented!(),
+        // Not enough body buffered yet.
+        if self.buffer.len() < header_len + length {
+            return Ok(None);
         }
+
+        // Consume the length VarInt, then decode the packet body (which itself
+        // begins with the packet-id VarInt handled by `C2SPacket::decode`).
+        self.buffer.advance(header_len);
+
+        let packet = {
+            let mut body = Cursor::new(&self.buffer[..length]);
+            C2SPacket::decode_in_state(self.state, &mut body)?
+        };
+        debug!("(↓) packet recieved: {:?}", &packet);
 
         self.buffer.advance(length);
 
-        Ok(())
+        Ok(Some(packet))
+    }
+
+    /// Routes a decoded packet to the handler for the connection's current
+    /// state.
+    async fn dispatch_packet(&mut self, packet: C2SPacket) -> Result<()> {
+        match self.state {
+            State::Handshake => self.handle_handshake(packet).await,
+            State::Status => self.handle_status(packet).await,
+            State::Login => self.handle_login(packet).await,
+            State::Play => unimplemented!(),
+        }
     }
 
     pub async fn handle_handshake(&mut self, packet: C2SPacket) -> Result<()> {
@@ -235,45 +262,83 @@ impl Connection {
         use statik_proto::s2c::login::S2CDisconnect;
         match packet {
             C2SPacket::LoginStart(login_start) => {
-                //later use tera templating?
+                if !is_valid_username(&login_start.username) {
+                    warn!(
+                        "Rejected login from {}: invalid username \"{}\".",
+                        self.address, login_start.username
+                    );
+                    self.write_packet(S2CDisconnect {
+                        reason: Chat::new("Invalid username."),
+                    })
+                    .await?;
+                    return Ok(());
+                }
+
+                // The disconnect message is config-driven. A `{username}`
+                // placeholder is substituted with the connecting player's name
+                // (full templating is a future TODO — see TODO.md).
+                let disconnect_msg = {
+                    let config = self.config.read().await;
+                    config
+                        .mc
+                        .disconnect_msg
+                        .replace("{username}", &login_start.username)
+                };
+
+                info!(
+                    "Player \"{}\" (from {}) attempted login; disconnecting and signalling the \
+                     real server to start.",
+                    login_start.username, self.address
+                );
+
                 let disconnect = S2CDisconnect {
-                    reason: Chat::new(
-                        /* self.config.read().await.mc.disconnect_msg.clone() */
-                        format!(
-                            "{}, the server is now starting. It will be up in around 30s-1m!",
-                            login_start.username
-                        ),
-                    ),
+                    reason: Chat::new(disconnect_msg),
                 };
 
                 self.write_packet(disconnect).await?;
 
                 Ok(())
             }
-            _ => unimplemented!(),
+
+            // statik does not implement encryption or login plugin negotiation
+            // (it never sends EncryptionRequest / LoginPluginRequest). Receiving
+            // either is a protocol violation — error out instead of panicking.
+            C2SPacket::EncryptionResponse(_) => bail!(
+                "Received EncryptionResponse from {} but statik never sends an EncryptionRequest; \
+                 encryption is not supported.",
+                self.address
+            ),
+            C2SPacket::LoginPluginResponse(_) => bail!(
+                "Received LoginPluginResponse from {} but statik never sends a \
+                 LoginPluginRequest; plugin login is not supported.",
+                self.address
+            ),
+            other => bail!("Received a non-login packet in the login stage: {other:?}"),
         }
     }
 
-    ///jank as. fix later.
+    /// Encodes `packet` and writes it to the stream, framed with a leading
+    /// VarInt length prefix: `[VarInt(length), packet-id VarInt, fields...]`.
+    ///
+    /// The packet body is encoded into `staging` first so its length is known,
+    /// then the length prefix (at most 5 bytes, encoded on the stack) and the
+    /// body are written to the buffered stream and flushed.
     pub async fn write_packet(&mut self, packet: impl Packet) -> Result<()> {
-        packet.encode(&mut self.queue)?;
+        self.staging.clear();
+        packet.encode(&mut self.staging)?;
 
-        let packet_len = self.queue.len();
-        VarInt(packet_len as i32).encode(&mut self.staging)?;
+        // VarInt is at most 5 bytes; encode the length prefix on the stack.
+        let mut len_buf = [0u8; 5];
+        let mut len_cursor = std::io::Cursor::new(&mut len_buf[..]);
+        VarInt(self.staging.len() as i32).encode(&mut len_cursor)?;
+        let len_bytes = len_cursor.position() as usize;
 
-        self.staging.extend_from_slice(&self.queue);
-
-        trace!("writing packet to tcp stream.");
+        trace!("writing packet to tcp stream: {packet:?}");
+        self.stream.write_all(&len_buf[..len_bytes]).await?;
         self.stream.write_all(&self.staging).await?;
-
         self.stream.flush().await?;
 
-        self.queue.clear();
-
-        trace!("(↑) packet sent: {packet:?}");
-
-        self.staging.clear();
-
+        trace!("(↑) packet sent.");
         Ok(())
     }
 }

@@ -75,11 +75,9 @@ pub fn derive_packet_group(item: TokenStream) -> Result<TokenStream> {
                 .iter()
                 .map(|(packet_name, variant_name)| {
                     quote! {
-                        #packet_name::ID => {
-
-                            Ok(Self::#variant_name(#packet_name::decode(&mut _buffer)?))
-
-                        },
+                        if state == #packet_name::STATE && _id == #packet_name::ID {
+                            return Ok(Self::#variant_name(#packet_name::decode(&mut _buffer)?));
+                        }
                     }
                 })
                 .collect::<TokenStream>();
@@ -99,18 +97,29 @@ pub fn derive_packet_group(item: TokenStream) -> Result<TokenStream> {
 
                 #from_fields
 
-                impl ::statik_core::packet::Decode for #ident {
-
-                    fn decode(mut _buffer: impl ::std::io::Read) -> ::anyhow::Result<Self> {
+                impl #ident {
+                    /// Decode a packet from `_buffer`, disambiguating its leading
+                    /// VarInt packet id by the current connection `state`.
+                    ///
+                    /// Minecraft reuses packet ids across protocol states (for
+                    /// example id `0x00` exists in Handshake, Status and Login
+                    /// for C2S packets), so decoding by id alone is ambiguous.
+                    /// This dispatches to the variant whose `Packet::STATE`
+                    /// matches `state` and whose `Packet::ID` matches the leading
+                    /// VarInt.
+                    pub fn decode_in_state(
+                        state: ::statik_core::state::State,
+                        mut _buffer: impl ::std::io::Read,
+                    ) -> ::anyhow::Result<Self> {
 
                         use ::statik_core::{packet::{Decode, Packet}, varint::VarInt};
-                        use ::anyhow::{Context, ensure, bail, Error};
+                        use ::anyhow::bail;
 
-                        match VarInt::decode(&mut _buffer)?.0 {
+                        let _id = VarInt::decode(&mut _buffer)?.0;
 
-                            #decode_fields
-                            _n => bail!("Invalid packet id! Tried to parse packet with id: {}", _n)
-                        }
+                        #decode_fields
+
+                        bail!("No packet with id {} in state {:?}", _id, state);
                     }
                 }
 

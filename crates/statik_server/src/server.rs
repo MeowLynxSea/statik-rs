@@ -101,18 +101,16 @@ impl Server {
                             let shutdown_complete_tx = self.shutdown_complete_tx.clone();
                             let shutdown = Shutdown::new(self.notify_shutdown.subscribe());
 
-                            //replace this with shared config struct later
                             let config = self.config.clone();
-                            let config2 = self.config.clone();
 
                             tokio::spawn(async move {
+                                let connection = Connection::new(config, stream, address).await;
 
-                                if let Err(err) = Handler::new(config, Connection::new(config2, stream, address).await, shutdown, shutdown_complete_tx).await.run().await {
+                                if let Err(err) = Handler::new(connection, shutdown, shutdown_complete_tx).await.run().await {
                                     error!("Connection error: {err:#}");
                                 }
 
                                 info!("Connection with mc client {} ended.", address);
-
                             });
                         },
                         Err(err) => error!("Failed to accept mc connection: {:#}", anyhow!(err)),
@@ -120,22 +118,16 @@ impl Server {
                 }
                 res = self.api_listener.accept() => {
                     match res {
-                        Ok((_stream, address)) => {
+                        Ok((stream, address)) => {
                             info!("New api connection from {}.", address);
 
-                            let _shutdown_complete_tx = self.shutdown_complete_tx.clone();
-                            let _shutdown = Shutdown::new(self.notify_shutdown.subscribe());
+                            let notify_shutdown = self.notify_shutdown.clone();
+                            let config = self.config.clone();
 
-                            let _config = self.config.clone();
-
-                            todo!()
-
-                            // tokio::spawn(async move {
-
-                            //     //handler
-                            //     Handler::new(config, stream, shutdown, shutdown_complete_tx).await.run().await;
-
-                            // });
+                            tokio::spawn(async move {
+                                crate::api::handle(stream, address, config, notify_shutdown).await;
+                                debug!("Api connection from {} closed.", address);
+                            });
                         },
                         Err(err) => error!("Failed to accept api connection: {:#}", anyhow!(err)),
                     }

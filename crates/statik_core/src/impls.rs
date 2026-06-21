@@ -128,7 +128,7 @@ impl<T: Encode> Encode for Option<T> {
 
 impl<'a, B> Encode for Cow<'a, B>
 where
-    B: ToOwned + Encode + ?Sized,
+    B: ToOwned + Encode,
 {
     fn encode(&self, buffer: impl Write) -> Result<()> {
         self.as_ref().encode(buffer)

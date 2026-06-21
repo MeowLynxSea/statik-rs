@@ -2,7 +2,7 @@
 
 mod quit;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use statik_core::prelude::*;
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
             }
         },
         Err(e) => {
-            if config_path == PathBuf::from("statik.toml") {
+            if config_path.as_path() == Path::new("statik.toml") {
                 //will error if we don't have write permissions.
                 if let Err(e) = tokio::fs::write(
                     PathBuf::from("statik.toml"),
@@ -77,6 +77,12 @@ async fn main() -> Result<()> {
         // .with_file(true)
         // .with_thread_names(true)
         .init();
+
+    // Install the `log` -> `tracing` bridge so that the `log` macros
+    // re-exported via `statik_core::prelude` (used throughout the server
+    // crate) are emitted by the tracing fmt subscriber above. Without this,
+    // those records are silently dropped.
+    tracing_log::LogTracer::init()?;
 
     info!("Statik server is starting.");
 

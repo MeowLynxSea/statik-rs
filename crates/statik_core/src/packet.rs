@@ -5,7 +5,8 @@ use crate::{prelude::*, state};
 /// The [`Encode`] + [`Decode`] implementations must read and write a
 /// leading [`VarInt`] packet ID before any other data.
 ///
-/// a packet must have these fields internally: \[length, packetId, AllOtherData\]
+/// a packet must have these fields internally: \[length, packetId,
+/// AllOtherData\]
 ///
 /// with the types: \[`VarInt`, `VarInt`, `[u8]`\]
 pub trait Packet: Decode + Encode + Sized + std::fmt::Debug {
@@ -27,9 +28,10 @@ pub trait Encode: Sized {
     /// Writes this object to the provided writer.
     ///
     /// If this type also implements [`Decode`] then successful calls to this
-    /// function returning `Ok(())` must always successfully [`Decode::decode`] using
-    /// the data that was written to the writer. The exact number of bytes
-    /// that were originally written must be consumed during the decoding.
+    /// function returning `Ok(())` must always successfully [`Decode::decode`]
+    /// using the data that was written to the writer. The exact number of
+    /// bytes that were originally written must be consumed during the
+    /// decoding.
     fn encode(&self, buffer: impl Write) -> Result<()>;
 }
 

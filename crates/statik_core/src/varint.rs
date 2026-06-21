@@ -35,21 +35,28 @@ impl Encode for VarInt {
 
 impl Decode for VarInt {
     fn decode(mut buffer: impl Read) -> Result<Self> {
-        let mut value = 0b0;
-        let mut pos = 0b0;
+        // Accumulate into a `u32` so that the final byte's `<< pos` cannot
+        // trigger an arithmetic overflow (which panics in debug builds for
+        // `i32`). The Minecraft VarInt is a signed 32-bit integer whose bits
+        // are reinterpreted directly, so a single `as i32` cast at the end
+        // recovers negative values correctly.
+        let mut value: u32 = 0;
+        let mut pos: u32 = 0;
 
         loop {
             let byte = buffer.read_u8()?;
 
-            value |= ((byte & SEGMENT_BITS) as i32) << pos;
+            value |= ((byte & SEGMENT_BITS) as u32) << pos;
 
             if (byte & CONTINUE_BIT) == 0 {
-                return Ok(VarInt(value));
+                return Ok(VarInt(value as i32));
             }
 
             pos += 7;
 
-            if pos >= 32 {
+            // A VarInt is at most 5 bytes (35 bits of position consumed).
+            // If we still see a continuation bit after that, it's malformed.
+            if pos >= 35 {
                 return Err(anyhow!(
                     "Cannot decode VarInt! Exceeds maximum capacity of 5 bytes \
                      (2147483647/-2147483648)."
@@ -104,5 +111,79 @@ impl From<VarInt> for usize {
 impl From<VarInt> for isize {
     fn from(value: VarInt) -> Self {
         value.0 as isize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip(v: i32) {
+        let mut buf = Vec::new();
+        VarInt(v).encode(&mut buf).expect("encode");
+        let decoded = VarInt::decode(&mut &buf[..]).expect("decode");
+        assert_eq!(decoded.0, v, "roundtrip for {v} (bytes {buf:?})");
+    }
+
+    #[test]
+    fn roundtrip_basic() {
+        for &v in &[
+            0,
+            1,
+            -1,
+            127,
+            128,
+            255,
+            1024,
+            16_383,
+            16_384,
+            2_097_151,
+            2_097_152,
+            134_217_728,
+            i32::MAX,
+            i32::MIN,
+            -2_097_151,
+        ] {
+            roundtrip(v);
+        }
+    }
+
+    #[test]
+    fn known_wire_bytes() {
+        // Reference encodings from wiki.vg.
+        let mut buf = Vec::new();
+        VarInt(0).encode(&mut buf).unwrap();
+        assert_eq!(buf, [0x00]);
+
+        buf.clear();
+        VarInt(127).encode(&mut buf).unwrap();
+        assert_eq!(buf, [0x7f]);
+
+        buf.clear();
+        VarInt(128).encode(&mut buf).unwrap();
+        assert_eq!(buf, [0x80, 0x01]);
+
+        buf.clear();
+        VarInt(255).encode(&mut buf).unwrap();
+        assert_eq!(buf, [0xff, 0x01]);
+    }
+
+    #[test]
+    fn rejects_overlong_varint() {
+        // Six continuation bytes must be rejected, not panic.
+        let malformed = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+        let result = VarInt::decode(&mut &malformed[..]);
+        assert!(result.is_err(), "expected an error for an overlong VarInt");
+    }
+
+    #[test]
+    fn negative_one_decodes_without_panic() {
+        // Regression for the debug-build shift-overflow panic: -1 encodes to
+        // `FF FF FF FF 0F` and must decode back to -1.
+        let mut buf = Vec::new();
+        VarInt(-1).encode(&mut buf).unwrap();
+        assert_eq!(buf, [0xff, 0xff, 0xff, 0xff, 0x0f]);
+        let decoded = VarInt::decode(&mut &buf[..]).unwrap();
+        assert_eq!(decoded.0, -1);
     }
 }

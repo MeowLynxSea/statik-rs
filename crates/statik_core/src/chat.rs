@@ -2,8 +2,6 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::prelude::*;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chat {
     text: Cow<'static, str>,

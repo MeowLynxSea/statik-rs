@@ -1,3 +1,4 @@
+use statik_core::prelude::warn;
 use tokio::sync::broadcast;
 
 /// Listens for the server shutdown signal.
@@ -34,13 +35,29 @@ impl Shutdown {
     }
 
     /// Receive the shutdown notice, waiting if necessary.
-    pub(crate) async fn recv(&mut self) -> String {
-        // Cannot receive a "lag error" as only one value is ever sent.
-        let Ok(reason) = self.recv.recv().await else { unreachable!("theoretically this is unreachable.") };
-
-        // Remember that the signal has been received.
-        self.is_shutdown = true;
-
-        reason
+    ///
+    /// Returns the disconnect reason string, or `None` if the shutdown
+    /// sender was dropped without ever signalling (in which case there is
+    /// no meaningful reason to report).
+    pub(crate) async fn recv(&mut self) -> Option<String> {
+        // The broadcast channel has capacity 1 and only a single value is ever
+        // sent. A `Lagged` error is still possible if a slow subscriber missed
+        // the send, and `Closed` happens if all senders are dropped. Neither
+        // should panic the server.
+        match self.recv.recv().await {
+            Ok(reason) => {
+                self.is_shutdown = true;
+                Some(reason)
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                warn!("shutdown channel closed without a signal; no disconnect reason.");
+                None
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                warn!("shutdown channel lagged, missed {n} signals; treating as shutdown.");
+                self.is_shutdown = true;
+                None
+            }
+        }
     }
 }
