@@ -150,11 +150,7 @@ fn play_player_pos_roundtrip() {
         x: 1.0,
         y: 64.5,
         z: -3.25,
-        y_rot: 180.0,
-        x_rot: 45.0,
         on_ground: true,
-        has_pos: true,
-        has_rot: true,
     };
     let buf = encode(&pkt);
 
@@ -164,8 +160,7 @@ fn play_player_pos_roundtrip() {
             assert_eq!(p.x, 1.0);
             assert_eq!(p.y, 64.5);
             assert_eq!(p.z, -3.25);
-            assert_eq!(p.y_rot, 180.0);
-            assert_eq!(p.x_rot, 45.0);
+            assert!(p.on_ground);
         }
         other => panic!("expected PlayerPos, got {other:?}"),
     }
@@ -173,11 +168,9 @@ fn play_player_pos_roundtrip() {
 
 #[test]
 fn s2c_player_abilities_roundtrip() {
+    use statik_proto::s2c::play::abilities;
     let pkt = S2CPlayerAbilities {
-        invulnerable: true,
-        is_flying: true,
-        can_fly: true,
-        instabuild: false,
+        flags: abilities::INVULNERABLE | abilities::FLYING | abilities::CAN_FLY,
         flying_speed: 0.05,
         walking_speed: 0.1,
     };
@@ -186,10 +179,10 @@ fn s2c_player_abilities_roundtrip() {
     let decoded = S2CPacket::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
     match decoded {
         S2CPacket::PlayerAbilities(a) => {
-            assert!(a.invulnerable);
-            assert!(a.is_flying);
-            assert!(a.can_fly);
-            assert!(!a.instabuild);
+            assert_eq!(
+                a.flags,
+                abilities::INVULNERABLE | abilities::FLYING | abilities::CAN_FLY
+            );
             assert_eq!(a.flying_speed, 0.05);
             assert_eq!(a.walking_speed, 0.1);
         }
@@ -205,7 +198,7 @@ fn s2c_player_position_roundtrip() {
         z: 0.5,
         y_rot: 0.0,
         x_rot: 0.0,
-        relative_arguments: BitSet::empty(),
+        relative_arguments: 0,
         id: VarInt(0),
     };
     let buf = encode(&pkt);
@@ -237,6 +230,116 @@ fn s2c_game_event_roundtrip() {
             assert_eq!(g.param, 0.0);
         }
         other => panic!("expected GameEvent, got {other:?}"),
+    }
+}
+
+#[test]
+fn c2s_client_information_roundtrip() {
+    let pkt = C2SClientInformation {
+        language: "zh_cn".to_string(),
+        view_distance: 8,
+        chat_visibility: VarInt(0),
+        chat_colors: true,
+        skin_parts: 127,
+        main_hand: VarInt(1),
+        text_filtering_enabled: true,
+        allows_listing: true,
+    };
+    let buf = encode(&pkt);
+
+    let decoded = C2SPacket::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    match decoded {
+        C2SPacket::ClientInformation(c) => {
+            assert_eq!(c.language, "zh_cn");
+            assert_eq!(c.view_distance, 8);
+            assert_eq!(c.chat_visibility, VarInt(0));
+            assert!(c.chat_colors);
+            assert_eq!(c.skin_parts, 127);
+            assert_eq!(c.main_hand, VarInt(1));
+            assert!(c.text_filtering_enabled);
+            assert!(c.allows_listing);
+        }
+        other => panic!("expected ClientInformation, got {other:?}"),
+    }
+}
+
+#[test]
+fn c2s_custom_payload_roundtrip() {
+    let pkt = C2SCustomPayload {
+        channel: "minecraft:brand".to_string(),
+        data: RawBytes::new(vec![0x07, b'v', b'a', b'n', b'i', b'l', b'l', b'a']),
+    };
+    let buf = encode(&pkt);
+
+    let decoded = C2SPacket::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    match decoded {
+        C2SPacket::CustomPayload(c) => {
+            assert_eq!(c.channel, "minecraft:brand");
+            assert_eq!(
+                &*c.data.0,
+                &[0x07, b'v', b'a', b'n', b'i', b'l', b'l', b'a']
+            );
+        }
+        other => panic!("expected CustomPayload, got {other:?}"),
+    }
+}
+
+#[test]
+fn c2s_player_pos_rot_roundtrip() {
+    let pkt = C2SPlayerPosRot {
+        x: 1.0,
+        y: 64.5,
+        z: -3.25,
+        y_rot: 180.0,
+        x_rot: 45.0,
+        on_ground: true,
+    };
+    let buf = encode(&pkt);
+
+    let decoded = C2SPacket::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    match decoded {
+        C2SPacket::PlayerPosRot(p) => {
+            assert_eq!(p.x, 1.0);
+            assert_eq!(p.y, 64.5);
+            assert_eq!(p.z, -3.25);
+            assert_eq!(p.y_rot, 180.0);
+            assert_eq!(p.x_rot, 45.0);
+            assert!(p.on_ground);
+        }
+        other => panic!("expected PlayerPosRot, got {other:?}"),
+    }
+}
+
+#[test]
+fn c2s_player_rot_roundtrip() {
+    let pkt = C2SPlayerRot {
+        y_rot: 90.0,
+        x_rot: -10.0,
+        on_ground: false,
+    };
+    let buf = encode(&pkt);
+
+    let decoded = C2SPacket::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    match decoded {
+        C2SPacket::PlayerRot(p) => {
+            assert_eq!(p.y_rot, 90.0);
+            assert_eq!(p.x_rot, -10.0);
+            assert!(!p.on_ground);
+        }
+        other => panic!("expected PlayerRot, got {other:?}"),
+    }
+}
+
+#[test]
+fn block_pos_roundtrip() {
+    // Includes negative coords to exercise sign-extension on unpack.
+    for (x, y, z) in [(0, 64, 0), (1, 64, -3), (-30_000_000, -2048, 29_999_999)] {
+        let pos = BlockPos::new(x, y, z);
+        let mut buf = Vec::new();
+        pos.encode(&mut buf).expect("encode");
+        assert_eq!(buf.len(), 8); // packed into a single i64
+        let decoded = BlockPos::decode(&mut &buf[..]).expect("decode");
+        assert_eq!(decoded, pos);
     }
 }
 

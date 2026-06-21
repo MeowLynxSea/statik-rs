@@ -2,6 +2,7 @@ pub mod bitset;
 pub mod chat;
 pub mod impls;
 pub mod packet;
+pub mod position;
 pub mod raw;
 pub mod state;
 pub mod varint;
@@ -12,7 +13,7 @@ pub mod prelude {
     pub use log::{debug, error, info, log, trace, warn};
 
     pub use crate::{
-        bitset::*, chat::*, packet::*, raw::*, state::*, varint::*, MINECRAFT_VERSION,
+        bitset::*, chat::*, packet::*, position::*, raw::*, state::*, varint::*, MINECRAFT_VERSION,
         PROTOCOL_VERSION,
     };
 }

@@ -8,7 +8,10 @@ use bytes::{Buf, BytesMut};
 use statik_core::prelude::*;
 use statik_proto::{
     c2s::C2SPacket,
-    s2c::status::response::{Players, StatusResponse},
+    s2c::{
+        play::S2CKeepAlive,
+        status::response::{Players, StatusResponse},
+    },
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufWriter},
@@ -17,6 +20,10 @@ use tokio::{
 };
 
 use crate::config::ServerConfig;
+
+/// How often the server sends a Play-state `S2CKeepAlive`. The vanilla client
+/// disconnects after ~30s of silence, so 15s gives comfortable headroom.
+const KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Checks if a username COULD be a valid minecraft account's username.
 ///
@@ -110,12 +117,27 @@ impl Connection {
     /// data remaining in the read buffer after a packet has been parsed is kept
     /// there for the next iteration.
     ///
+    /// While in Play state, a keepalive timer runs concurrently: every
+    /// [`KEEPALIVE_INTERVAL`] the server sends a fresh `S2CKeepAlive` with a
+    /// new id. The vanilla client disconnects after ~30s without a keepalive,
+    /// so this MUST be server-driven — the client never sends one
+    /// unprompted. (Keepalive ids are just monotonic counters; we don't track
+    /// acks in limbo.)
+    ///
     /// # Returns
     ///
     /// Returns `Err` if the `TcpStream` is closed (mapped to
     /// [`io::ErrorKind::UnexpectedEof`]) or a malformed frame is encountered.
     /// Callers may treat a clean EOF as a normal connection end.
     pub async fn handle_connection(&mut self) -> Result<()> {
+        // Only run the keepalive timer once we're in Play state (it'd be
+        // pointless — and wrong — during handshake/status/login).
+        let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+        // The first tick fires immediately; skip it so we don't send a
+        // keepalive the instant we enter the loop.
+        keepalive.tick().await;
+        let mut next_keepalive_id: i64 = 0;
+
         loop {
             trace!("handling connection with {}", self.address);
 
@@ -126,13 +148,27 @@ impl Connection {
                 self.dispatch_packet(packet).await?;
             }
 
-            let bytes_read = self.stream.read_buf(&mut self.buffer).await?;
-
-            if bytes_read == 0 {
-                return Err(io::Error::from(ErrorKind::UnexpectedEof).into());
+            // Race the next read against the keepalive timer. The read branch
+            // is `Ok(0)`-aware (clean EOF) and resumes the loop on partial
+            // data; the keepalive branch fires a `S2CKeepAlive` and loops.
+            tokio::select! {
+                read = self.stream.read_buf(&mut self.buffer) => {
+                    let bytes_read = read?;
+                    if bytes_read == 0 {
+                        return Err(io::Error::from(ErrorKind::UnexpectedEof).into());
+                    }
+                    trace!("read {bytes_read} bytes from {}.", self.address);
+                }
+                _ = keepalive.tick(), if self.state == State::Play => {
+                    let id = next_keepalive_id;
+                    next_keepalive_id = next_keepalive_id.wrapping_add(1);
+                    trace!(
+                        "sending keepalive id {id} to {} (Play keepalive timer)",
+                        self.address
+                    );
+                    self.write_packet(S2CKeepAlive { id }).await?;
+                }
             }
-
-            trace!("read {bytes_read} bytes from {}.", self.address);
         }
     }
 
@@ -338,9 +374,9 @@ impl Connection {
         use statik_proto::s2c::{
             login::{S2CDisconnect, S2CLoginSuccess, S2CSetCompression},
             play::{
-                abilities, pack_block_pos, registry_bytes, void_chunk_bytes, S2CGameEvent,
-                S2CLevelChunkWithLight, S2CLogin, S2CPlayerAbilities, S2CPlayerPosition,
-                S2CSetChunkCacheCenter, S2CSetChunkCacheRadius, S2CSetDefaultSpawnPosition,
+                abilities, registry_bytes, void_chunk_bytes, S2CGameEvent, S2CLevelChunkWithLight,
+                S2CLogin, S2CPlayerAbilities, S2CPlayerPosition, S2CSetChunkCacheCenter,
+                S2CSetChunkCacheRadius, S2CSetDefaultSpawnPosition,
             },
         };
         use uuid::Uuid;
@@ -461,7 +497,7 @@ impl Connection {
                 })
                 .await?;
                 self.write_packet(S2CSetDefaultSpawnPosition {
-                    location: pack_block_pos(
+                    location: BlockPos::new(
                         limbo_pos[0] as i32,
                         limbo_pos[1] as i32,
                         limbo_pos[2] as i32,
@@ -522,22 +558,24 @@ impl Connection {
 
     /// Handle a packet received while in Play state.
     ///
-    /// In limbo we accept teleport acks silently, drive keepalive
-    /// response-based (no separate timer task needed), and ignore the
-    /// client's position updates — flying mode means the player won't fall,
-    /// and the server doesn't actually care where they think they are.
+    /// In limbo we accept teleport acks silently, echo back the client's
+    /// keepalive acks (the server also drives its own keepalive timer in
+    /// [`handle_connection`]; the client's `C2SKeepAlive` is just the reply),
+    /// and ignore the client's position updates — flying mode means the player
+    /// won't fall, and the server doesn't actually care where they think they
+    /// are.
     pub async fn handle_play(&mut self, packet: C2SPacket) -> Result<()> {
-        use statik_proto::s2c::play::S2CKeepAlive;
         match packet {
             C2SPacket::AcceptTeleportation(t) => {
                 debug!("client accepted teleport id {:?}", t.id);
                 Ok(())
             }
             C2SPacket::KeepAlive(k) => {
-                // Response-driven: send a fresh keepalive each time the
-                // client echoes ours back. Avoids needing a timer task that
-                // would have to share `&mut self`.
-                self.write_packet(S2CKeepAlive { id: k.id }).await?;
+                // The client acked one of our `S2CKeepAlive`s. Nothing to do —
+                // the keepalive timer in `handle_connection` drives the next
+                // one. (We don't track pending ids in limbo; the ack is purely
+                // a liveness signal.)
+                trace!("client acked keepalive id {} from {}", k.id, self.address);
                 Ok(())
             }
             C2SPacket::PlayerPos(_) | C2SPacket::PlayerPosRot(_) | C2SPacket::PlayerRot(_) => {
@@ -628,14 +666,23 @@ impl Connection {
             debug!("  [0]  packet_id 0x28");
             let mut off = 1;
             {
-                let v = i32::from_be_bytes([body[off], body[off + 1], body[off + 2], body[off + 3]]);
-                debug!("  [{off:4}..{end:4}]  player_id i32={v}", end = off + 4, off = off);
+                let v =
+                    i32::from_be_bytes([body[off], body[off + 1], body[off + 2], body[off + 3]]);
+                debug!(
+                    "  [{off:4}..{end:4}]  player_id i32={v}",
+                    end = off + 4,
+                    off = off
+                );
                 off += 4;
             }
             debug!("  [{off:4}]  hardcore = {}", body[off]);
             off += 1;
             if let Some((v, n)) = read_varint(body, off) {
-                debug!("  [{off:4}..{end:4}]  game_type VarInt={v}", end = off + n, off = off);
+                debug!(
+                    "  [{off:4}..{end:4}]  game_type VarInt={v}",
+                    end = off + n,
+                    off = off
+                );
                 off += n;
             }
             if let Some((v, n)) = read_varint(body, off) {
@@ -647,7 +694,11 @@ impl Connection {
                 off += n;
             }
             if let Some((count, n)) = read_varint(body, off) {
-                debug!("  [{off:4}..{end:4}]  levels.count VarInt={count}", end = off + n, off = off);
+                debug!(
+                    "  [{off:4}..{end:4}]  levels.count VarInt={count}",
+                    end = off + n,
+                    off = off
+                );
                 off += n;
                 for i in 0..count {
                     if let Some((slen, n)) = read_varint(body, off) {
@@ -672,7 +723,10 @@ impl Connection {
             debug!("  [{off:4}..]  registryHolder NBT:");
             walk_nbt(body, off, 0);
         } else {
-            debug!("(↑) sent packet 0x{pid:02x} ({} framed bytes)", framed.len());
+            debug!(
+                "(↑) sent packet 0x{pid:02x} ({} framed bytes)",
+                framed.len()
+            );
         }
 
         self.stream.write_all(&len_buf[..len_bytes]).await?;
@@ -683,7 +737,8 @@ impl Connection {
     }
 }
 
-/// Read a VarInt from `buf` starting at `off`. Returns `(value, bytes_consumed)`.
+/// Read a VarInt from `buf` starting at `off`. Returns `(value,
+/// bytes_consumed)`.
 fn read_varint(buf: &[u8], off: usize) -> Option<(i32, usize)> {
     let mut value: i32 = 0;
     let mut shift = 0u32;
@@ -743,7 +798,11 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                 if let Some((name, n)) = read_nbt_string(buf, off) {
                     off += n;
                     if off < buf.len() {
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_Byte name={name:?} value=0x{:02x}", buf[off], end = off + 1);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_Byte name={name:?} value=0x{:02x}",
+                            buf[off],
+                            end = off + 1
+                        );
                         off += 1;
                     } else {
                         debug!("{indent}[{start:4}]  TAG_Byte name={name:?} (truncated)");
@@ -759,7 +818,10 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                     off += n;
                     if off + 2 <= buf.len() {
                         let v = i16::from_be_bytes([buf[off], buf[off + 1]]);
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_Short name={name:?} value={v}", end = off + 2);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_Short name={name:?} value={v}",
+                            end = off + 2
+                        );
                         off += 2;
                     } else {
                         return;
@@ -772,8 +834,16 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                 if let Some((name, n)) = read_nbt_string(buf, off) {
                     off += n;
                     if off + 4 <= buf.len() {
-                        let v = i32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_Int name={name:?} value={v}", end = off + 4);
+                        let v = i32::from_be_bytes([
+                            buf[off],
+                            buf[off + 1],
+                            buf[off + 2],
+                            buf[off + 3],
+                        ]);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_Int name={name:?} value={v}",
+                            end = off + 4
+                        );
                         off += 4;
                     } else {
                         return;
@@ -787,7 +857,10 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                     off += n;
                     if off + 8 <= buf.len() {
                         let v = i64::from_be_bytes(buf[off..off + 8].try_into().unwrap());
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_Long name={name:?} value={v}", end = off + 8);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_Long name={name:?} value={v}",
+                            end = off + 8
+                        );
                         off += 8;
                     } else {
                         return;
@@ -800,8 +873,16 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                 if let Some((name, n)) = read_nbt_string(buf, off) {
                     off += n;
                     if off + 4 <= buf.len() {
-                        let v = f32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_Float name={name:?} value={v}", end = off + 4);
+                        let v = f32::from_be_bytes([
+                            buf[off],
+                            buf[off + 1],
+                            buf[off + 2],
+                            buf[off + 3],
+                        ]);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_Float name={name:?} value={v}",
+                            end = off + 4
+                        );
                         off += 4;
                     } else {
                         return;
@@ -815,7 +896,10 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                     off += n;
                     if off + 8 <= buf.len() {
                         let v = f64::from_be_bytes(buf[off..off + 8].try_into().unwrap());
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_Double name={name:?} value={v}", end = off + 8);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_Double name={name:?} value={v}",
+                            end = off + 8
+                        );
                         off += 8;
                     } else {
                         return;
@@ -828,12 +912,18 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                 if let Some((name, n)) = read_nbt_string(buf, off) {
                     off += n;
                     if off + 4 <= buf.len() {
-                        let len = i32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]) as usize;
+                        let len = i32::from_be_bytes([
+                            buf[off],
+                            buf[off + 1],
+                            buf[off + 2],
+                            buf[off + 3],
+                        ]) as usize;
                         off += 4;
                         if off + len <= buf.len() {
                             let preview = &buf[off..off + len.min(16)];
                             debug!(
-                                "{indent}[{start:4}..{end:4}]  TAG_ByteArray name={name:?} len={len} first16={:02x?}",
+                                "{indent}[{start:4}..{end:4}]  TAG_ByteArray name={name:?} \
+                                 len={len} first16={:02x?}",
                                 preview,
                                 end = off + len
                             );
@@ -853,7 +943,10 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                     off += n;
                     if let Some((s, m)) = read_nbt_string(buf, off) {
                         off += m;
-                        debug!("{indent}[{start:4}..{end:4}]  TAG_String name={name:?} value={s:?}", end = off);
+                        debug!(
+                            "{indent}[{start:4}..{end:4}]  TAG_String name={name:?} value={s:?}",
+                            end = off
+                        );
                     } else {
                         debug!("{indent}[{start:4}]  TAG_String name={name:?} (truncated value)");
                         return;
@@ -872,10 +965,16 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                         // `DataOutput.writeInt`), NOT VarInt.
                         if off + 4 <= buf.len() {
                             let count = i32::from_be_bytes([
-                                buf[off], buf[off + 1], buf[off + 2], buf[off + 3],
+                                buf[off],
+                                buf[off + 1],
+                                buf[off + 2],
+                                buf[off + 3],
                             ]);
                             off += 4;
-                            debug!("{indent}[{start:4}..]  TAG_List name={name:?} element_tag=0x{elem_type:02x} count={count}");
+                            debug!(
+                                "{indent}[{start:4}..]  TAG_List name={name:?} \
+                                 element_tag=0x{elem_type:02x} count={count}"
+                            );
                             for i in 0..count {
                                 debug!("{indent}  element {i}:");
                                 if elem_type == 0x0a {
@@ -912,10 +1011,19 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                 if let Some((name, n)) = read_nbt_string(buf, off) {
                     off += n;
                     if off + 4 <= buf.len() {
-                        let len = i32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]) as usize;
+                        let len = i32::from_be_bytes([
+                            buf[off],
+                            buf[off + 1],
+                            buf[off + 2],
+                            buf[off + 3],
+                        ]) as usize;
                         off += 4;
                         if off + len * 4 <= buf.len() {
-                            debug!("{indent}[{start:4}..{end:4}]  TAG_IntArray name={name:?} len={len}", end = off + len * 4);
+                            debug!(
+                                "{indent}[{start:4}..{end:4}]  TAG_IntArray name={name:?} \
+                                 len={len}",
+                                end = off + len * 4
+                            );
                             off += len * 4;
                         } else {
                             return;
@@ -931,10 +1039,19 @@ fn walk_nbt(buf: &[u8], mut off: usize, depth: usize) {
                 if let Some((name, n)) = read_nbt_string(buf, off) {
                     off += n;
                     if off + 4 <= buf.len() {
-                        let len = i32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]) as usize;
+                        let len = i32::from_be_bytes([
+                            buf[off],
+                            buf[off + 1],
+                            buf[off + 2],
+                            buf[off + 3],
+                        ]) as usize;
                         off += 4;
                         if off + len * 8 <= buf.len() {
-                            debug!("{indent}[{start:4}..{end:4}]  TAG_LongArray name={name:?} len={len}", end = off + len * 8);
+                            debug!(
+                                "{indent}[{start:4}..{end:4}]  TAG_LongArray name={name:?} \
+                                 len={len}",
+                                end = off + len * 8
+                            );
                             off += len * 8;
                         } else {
                             return;

@@ -155,6 +155,15 @@ impl Encode for Uuid {
     }
 }
 
+/// Fixed-length byte array: written verbatim with NO length prefix. Used for
+/// the fixed-size cryptographic fields in the protocol (e.g. the 256-byte
+/// message signatures and the 3-byte "acknowledged" bitset in chat packets).
+impl<const N: usize> Encode for [u8; N] {
+    fn encode(&self, mut buffer: impl Write) -> Result<()> {
+        Ok(buffer.write_all(self)?)
+    }
+}
+
 impl Encode for RawBytes {
     fn encode(&self, mut buffer: impl Write) -> Result<()> {
         Ok(buffer.write_all(&self.0)?)
@@ -326,6 +335,16 @@ where
 impl Decode for Uuid {
     fn decode(buffer: impl Read) -> Result<Self> {
         u128::decode(buffer).map(Uuid::from_u128)
+    }
+}
+
+/// Fixed-length byte array: reads exactly `N` bytes with no length prefix.
+/// The counterpart to the `[u8; N]` [`Encode`] impl above.
+impl<const N: usize> Decode for [u8; N] {
+    fn decode(mut buffer: impl Read) -> Result<Self> {
+        let mut arr = [0u8; N];
+        buffer.read_exact(&mut arr)?;
+        Ok(arr)
     }
 }
 

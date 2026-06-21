@@ -160,20 +160,12 @@ pub struct S2CSetChunkCacheRadius {
 /// 0x50 - Set Default Spawn Position Packet (S ➔ C).
 ///
 /// Sets the respawn anchor (used by the client for compass / death location
-/// hints). `location` is a Minecraft `BlockPos` packed into a single `i64`
-/// (NOT three `i32`s): `((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) |
-/// (y & 0xFFF)`. Use [`pack_block_pos`] to build it.
+/// hints). `location` is a [`BlockPos`], encoded as Minecraft's packed `i64`.
 #[derive(Debug, Packet)]
 #[packet(id = 0x50, state = State::Play)]
 pub struct S2CSetDefaultSpawnPosition {
-    pub location: i64,
+    pub location: BlockPos,
     pub angle: f32,
-}
-
-/// Pack a block position into Minecraft's 64-bit `BlockPos` wire encoding:
-/// `((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF)`.
-pub fn pack_block_pos(x: i32, y: i32, z: i32) -> i64 {
-    ((x as i64 & 0x3FF_FFFF) << 38) | ((z as i64 & 0x3FF_FFFF) << 12) | (y as i64 & 0xFFF)
 }
 
 // == Precomputed payloads == \\
