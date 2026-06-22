@@ -725,7 +725,7 @@ impl Connection {
                  violation."
             ));
         };
-        use statik_proto::v1_21_1::s2c::configuration::S2CFinishConfiguration;
+        
         match packet {
             C2SPacketV1_21_1::ClientInformation(info) => {
                 debug!(
