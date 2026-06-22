@@ -18,7 +18,7 @@ use statik_proto::{
             },
             handshake::C2SHandshake,
             login::{C2SHello, C2SLoginAcknowledged},
-            play::C2SKeepAlive,
+            play::{C2SChunkBatchReceived, C2SKeepAlive},
             C2SPacket as C2SPacketV1_21_1,
         },
         s2c::{
@@ -27,7 +27,10 @@ use statik_proto::{
                 S2CFinishConfiguration, S2CUpdateTags,
             },
             login::S2CLoginSuccess,
-            play::{S2CGameEvent, S2CLogin, S2CPlayerAbilities, S2CPlayerPosition},
+            play::{
+                S2CChunkBatchFinished, S2CChunkBatchStart, S2CGameEvent, S2CLogin,
+                S2CPlayerAbilities, S2CPlayerPosition,
+            },
             S2CPacket as S2CPacketV1_21_1,
         },
     },
@@ -193,6 +196,29 @@ fn play_keepalive_roundtrip() {
     match decoded {
         C2SPacketV1_21_1::KeepAlive(k) => assert_eq!(k.id, pkt.id),
         other => panic!("expected KeepAlive, got {other:?}"),
+    }
+}
+
+#[test]
+fn play_chunk_batch_received_roundtrip() {
+    // 0x08 - client's ack for `S2CChunkBatchFinished`. Wire shape per
+    // wiki.vg readme-1.21.1.md: single f32 `desiredChunksPerTick`. Without
+    // this struct, `decode_in_state` falls into the "No packet with id 8
+    // in state Play" debug branch in `Connection::try_parse_packet`.
+    let pkt = C2SChunkBatchReceived {
+        desired_chunks_per_tick: 5.0,
+    };
+    let buf = encode(&pkt);
+    // id 0x08 + f32(5.0) big-endian = [0x08, 0x40, 0xa0, 0x00, 0x00].
+    // statik_core::impls encodes f32 as BigEndian (Mojang wire convention).
+    assert_eq!(buf, [0x08, 0x40, 0xa0, 0x00, 0x00]);
+
+    let decoded = C2SPacketV1_21_1::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    match decoded {
+        C2SPacketV1_21_1::ChunkBatchReceived(c) => {
+            assert_eq!(c.desired_chunks_per_tick, 5.0);
+        }
+        other => panic!("expected ChunkBatchReceived, got {other:?}"),
     }
 }
 
@@ -905,4 +931,34 @@ fn void_chunk_payload_v1_21_1_top_level_shape() {
         bytes.len(),
         "no trailing bytes expected"
     );
+}
+
+#[test]
+fn s2c_chunk_batch_start_roundtrip() {
+    // Play 0x0D — empty body. Wire shape is just the packet id byte.
+    let pkt = S2CChunkBatchStart {};
+    let buf = encode(&pkt);
+    assert_eq!(buf, [0x0d]);
+
+    let decoded = S2CPacketV1_21_1::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    assert!(matches!(decoded, S2CPacketV1_21_1::ChunkBatchStart(_)));
+}
+
+#[test]
+fn s2c_chunk_batch_finished_roundtrip() {
+    // Play 0x0C — `batch_size: VarInt` (NOT the readme's "int": PrismarineJS
+    // protocol.json pins it to `varint`, and `batchSize` is not a position
+    // / count / block coord so the Java `int` field is misleading).
+    let pkt = S2CChunkBatchFinished {
+        batch_size: VarInt(1),
+    };
+    let buf = encode(&pkt);
+    // id 0x0C + VarInt(1) = [0x0c, 0x01].
+    assert_eq!(buf, [0x0c, 0x01]);
+
+    let decoded = S2CPacketV1_21_1::decode_in_state(State::Play, &mut &buf[..]).expect("decode");
+    match decoded {
+        S2CPacketV1_21_1::ChunkBatchFinished(f) => assert_eq!(f.batch_size, VarInt(1)),
+        other => panic!("expected ChunkBatchFinished, got {other:?}"),
+    }
 }

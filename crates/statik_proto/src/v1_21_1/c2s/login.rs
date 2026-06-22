@@ -29,7 +29,7 @@ pub struct C2SHello {
 #[packet(id = 0x01, state = State::Login)]
 pub struct C2SKey {
     pub public_key: Vec<u8>,
-    pub verify_token: Vec<u8>
+    pub verify_token: Vec<u8>,
 }
 
 /// 0x02 - Custom Query Answer (response to a `LoginPluginRequest`).

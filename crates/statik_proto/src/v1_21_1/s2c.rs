@@ -35,6 +35,8 @@ pub enum S2CPacket {
     KnownPacks(S2CKnownPacks),
 
     // Play (limbo only)
+    ChunkBatchStart(S2CChunkBatchStart),
+    ChunkBatchFinished(S2CChunkBatchFinished),
     DisconnectPlay(S2CDisconnectPlay),
     GameEvent(S2CGameEvent),
     KeepAlive(S2CKeepAlive),

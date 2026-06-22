@@ -46,6 +46,7 @@ pub enum C2SPacket {
 
     // Play (limbo only)
     AcceptTeleportation(C2SAcceptTeleportation),
+    ChunkBatchReceived(C2SChunkBatchReceived),
     KeepAlive(C2SKeepAlive),
     PlayerPos(C2SPlayerPos),
     PlayerPosRot(C2SPlayerPosRot),

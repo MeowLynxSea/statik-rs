@@ -725,7 +725,7 @@ impl Connection {
                  violation."
             ));
         };
-        
+
         match packet {
             C2SPacketV1_21_1::ClientInformation(info) => {
                 debug!(
@@ -868,9 +868,9 @@ impl Connection {
     /// longer inline — it was streamed during Configuration).
     async fn send_play_burst_v1_21_1(&mut self) -> Result<()> {
         use statik_proto::v1_21_1::s2c::play::{
-            void_chunk_bytes_v1_21_1, S2CGameEvent, S2CLevelChunkWithLight, S2CLogin,
-            S2CPlayerAbilities, S2CPlayerPosition, S2CSetChunkCacheCenter, S2CSetChunkCacheRadius,
-            S2CSetDefaultSpawnPosition, SpawnInfo,
+            void_chunk_bytes_v1_21_1, S2CChunkBatchFinished, S2CChunkBatchStart, S2CGameEvent,
+            S2CLevelChunkWithLight, S2CLogin, S2CPlayerAbilities, S2CPlayerPosition,
+            S2CSetChunkCacheCenter, S2CSetChunkCacheRadius, S2CSetDefaultSpawnPosition, SpawnInfo,
         };
 
         let limbo_pos;
@@ -941,8 +941,21 @@ impl Connection {
         // 1.20.1-shaped payload makes the 1.21.1 client fail decoding
         // with `Failed to decode packet
         // 'clientbound/minecraft:level_chunk_with_light'`.
+        //
+        // 1.20.2+ clients expect every chunk batch to be wrapped in a
+        // ChunkBatchStart / ChunkBatchFinished pair (see wiki.vg +
+        // PrismarineJS protocol.json packet_chunk_batch_start /
+        // packet_chunk_batch_finished). Without this wrapping the
+        // client stalls on "Loading World" for ~30s before timing out
+        // and forcing the player in. statik only ever sends one chunk
+        // per connection, so batch_size = 1.
+        self.write_packet(S2CChunkBatchStart {}).await?;
         self.write_packet(S2CLevelChunkWithLight {
             payload: RawBytes(void_chunk_bytes_v1_21_1().to_vec().into()),
+        })
+        .await?;
+        self.write_packet(S2CChunkBatchFinished {
+            batch_size: VarInt(1),
         })
         .await?;
 
@@ -977,11 +990,18 @@ impl Connection {
         })
         .await?;
 
-        // 7. Game Event (0x22) — START_WAITING_FOR_LEVELS. event value 7
-        // is the same in 1.20.1 and 1.21.1 (Mojang
-        // `ClientboundGameEventPacket.Type.START_WAITING_FOR_LEVELS` — index 7).
+        // 7. Game Event (0x22) — START_WAITING_FOR_LEVELS.
+        //
+        // The ordinal is **version-specific**, same caveat as the 1.20.1
+        // burst above:
+        //   - 1.20.1  : ordinal 12 (`LEVEL_CHUNKS_LOAD_START`)
+        //   - 1.20.2+ : ordinal 13 (1.20.2 inserted `LIMITED_CRAFTING` at 12, bumping
+        //     this event to 13)
+        // 1.21.1 is 1.20.2+, so 13. Sending 7 (RAIN_LEVEL_CHANGE) makes
+        // the client silently stay stuck on "Loading Terrain" — it
+        // updates rain, never tells the world to start ticking.
         self.write_packet(S2CGameEvent {
-            event: 7,
+            event: 13,
             param: 0.0,
         })
         .await?;
@@ -1021,6 +1041,13 @@ impl Connection {
             DecodedC2S::V1_21_1(p) => match p {
                 C2SPacketV1_21_1::AcceptTeleportation(t) => {
                     debug!("client accepted teleport id {:?}", t.id);
+                    Ok(())
+                }
+                C2SPacketV1_21_1::ChunkBatchReceived(c) => {
+                    trace!(
+                        "client acked chunk batch (desired_chunks_per_tick={})",
+                        c.desired_chunks_per_tick
+                    );
                     Ok(())
                 }
                 C2SPacketV1_21_1::KeepAlive(k) => {

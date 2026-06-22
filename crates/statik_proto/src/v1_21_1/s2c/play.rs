@@ -1,18 +1,48 @@
 //! Server-to-client packets in the Play state (1.21.1, protocol 767).
 //!
 //! Field structure of the limbo-bound packets (GameEvent, KeepAlive,
-//! PlayerPosition, PlayerAbilities, LevelChunkWithLight, SetChunkCacheCenter,
-//! SetChunkCacheRadius, SetDefaultSpawnPosition) is the canonical 1.21.1
-//! shape. The [`S2CLogin`] packet's registry arrives during Configuration
-//! via `S2CRegistryData`; `gameType` / `previousGameType` live in the
-//! inner [`SpawnInfo`] sub-struct ("CommonPlayerSpawnInfo" in Mojang
-//! source), and new fields (`do_limited_crafting`, `enforces_secure_chat`,
+//! PlayerPosition, PlayerAbilities, LevelChunkWithLight, ChunkBatchStart,
+//! ChunkBatchFinished, SetChunkCacheCenter, SetChunkCacheRadius,
+//! SetDefaultSpawnPosition) is the canonical 1.21.1 shape. The
+//! [`S2CLogin`] packet's registry arrives during Configuration via
+//! `S2CRegistryData`; `gameType` / `previousGameType` live in the inner
+//! [`SpawnInfo`] sub-struct ("CommonPlayerSpawnInfo" in Mojang source),
+//! and new fields (`do_limited_crafting`, `enforces_secure_chat`,
 //! `portal_cooldown`) appear. The full field layout is captured below from
 //! PrismarineJS protocol.json (`play.toClient.packet_login` + the
 //! `SpawnInfo` type).
 
 use statik_core::prelude::*;
 use statik_derive::*;
+
+/// 0x0C - Chunk Batch Finished.
+///
+/// Marks the end of a chunk batch introduced in 1.20.2+. `batch_size` is
+/// the number of `S2CLevelChunkWithLight` packets the server just sent in
+/// this batch; the vanilla 1.21.1 client uses this to decide when to
+/// transition out of "Loading World" and to throttle subsequent chunk
+/// loads via the `C2SChunkBatchReceived` ack (which statik ignores via the
+/// decode-and-skip rule in `connection::try_parse_packet`).
+///
+/// Wire type is `VarInt` per PrismarineJS
+/// `tmp/minecraft-data/data/pc/1.21.1/protocol.json` (`varint`), NOT the
+/// `int` shown in the wiki.vg readme — `batchSize` is not a position
+/// / count / block coord and the readme's Java `int` is misleading here.
+#[derive(Debug, Packet)]
+#[packet(id = 0x0C, state = State::Play)]
+pub struct S2CChunkBatchFinished {
+    pub batch_size: VarInt,
+}
+
+/// 0x0D - Chunk Batch Start.
+///
+/// Marks the beginning of a chunk batch. 1.20.2+ clients expect every
+/// `S2CLevelChunkWithLight` in a batch to be wrapped in a Start/Finished
+/// pair; without it the client stalls on "Loading World" for ~30s before
+/// timing out and forcing the player into the world. Has no fields.
+#[derive(Debug, Packet)]
+#[packet(id = 0x0D, state = State::Play)]
+pub struct S2CChunkBatchStart {}
 
 /// 0x1A - Disconnect.
 #[derive(Debug, Packet)]

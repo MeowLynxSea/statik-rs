@@ -13,6 +13,20 @@ pub struct C2SAcceptTeleportation {
     pub id: VarInt,
 }
 
+/// 0x08 - Chunk Batch Received.
+///
+/// Client's ack for the server's `S2CChunkBatchFinished`. Introduced in
+/// 1.20.2+ alongside the chunk batching protocol; `desired_chunks_per_tick`
+/// is the client's hint to the server for the next batch's chunk rate.
+/// statik ignores the value (limbo sends exactly one chunk per
+/// connection) but models the packet to keep `decode_in_state` from
+/// falling into the "ignoring undecodable Play packet" debug branch.
+#[derive(Debug, Packet)]
+#[packet(id = 0x08, state = State::Play)]
+pub struct C2SChunkBatchReceived {
+    pub desired_chunks_per_tick: f32,
+}
+
 /// 0x18 - Keep Alive.
 ///
 /// `id` is 8-byte signed BE (i64).
