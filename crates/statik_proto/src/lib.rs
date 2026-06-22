@@ -1,10 +1,10 @@
-pub mod c2s;
-pub mod s2c;
+pub mod common;
+pub mod v1_20_1;
+pub mod v1_21_1;
 
 pub mod prelude {
 
-    pub use crate::{
-        c2s::{handshake::*, login::*, play::*, status::*, C2SPacket},
-        s2c::{login::*, play::*, status::*, S2CPacket},
-    };
+    /// Cross-version shared types (Login Success property, abilities bit
+    /// constants, Configuration KnownPack, the shared void-chunk builder).
+    pub use crate::common::{abilities, void_chunk_bytes, KnownPack, Property};
 }

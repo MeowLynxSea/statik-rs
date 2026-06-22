@@ -19,6 +19,10 @@ pub struct C2SHandshake {
     /// Some protocol dumps (e.g. the bundled readmes) list the field as
     /// `int`; that column reflects the Java type, not the on-wire width.
     pub server_port: u16,
-    ///1 for Status, 2 for Login.
-    pub next_state: State,
+    ///1 for Status, 2 for Login, 3 for Transfer (1.21+).
+    ///
+    /// This is [`statik_core::handshake::ClientIntent`], **not** [`State`]: it
+    /// is decoupled from `State` so that `State::Configuration = 3` does not
+    /// collide with the Transfer handshake value.
+    pub next_state: ClientIntent,
 }

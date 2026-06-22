@@ -362,9 +362,11 @@ impl Decode for State {
             0 => Self::Handshake,
             1 => Self::Status,
             2 => Self::Login,
-            3 => Self::Play,
+            3 => Self::Configuration,
+            4 => Self::Play,
             n => bail!(
-                "parsed VarInt returned an invalid State: {n}. Only values 0,1,2 and 3 are valid."
+                "parsed VarInt returned an invalid State: {n}. Only values 0,1,2,3 and 4 are \
+                 valid."
             ),
         })
     }

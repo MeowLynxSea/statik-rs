@@ -12,3 +12,6 @@ statik.toml
 *.code-workspace
 
 tmp/
+
+# Local debug dumps (e.g. S2CLogin body tracing).
+statik_login_debug.bin

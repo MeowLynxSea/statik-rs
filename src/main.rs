@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use statik_core::prelude::*;
-use statik_server::{config::ServerConfig, server::Server};
+use statik_server::{config::ServerConfig, protocol::ProtocolKind, server::Server};
 use tokio::{
     select,
     sync::{broadcast, mpsc},
@@ -86,6 +86,22 @@ async fn main() -> Result<()> {
 
     info!("Statik server is starting.");
 
+    // Select the Minecraft protocol version from the `[mc] version`
+    // config field. Defaults to "1.20.1".
+    let version_str = config.mc.version.as_deref().unwrap_or("1.20.1");
+    let protocol = match version_str.parse::<ProtocolKind>() {
+        Ok(p) => p,
+        Err(e) => {
+            error!("{e:#}");
+            return Err(e);
+        }
+    };
+    info!(
+        "Selected minecraft protocol: {} ({}).",
+        protocol.minecraft_version(),
+        protocol.protocol_version()
+    );
+
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -94,7 +110,7 @@ async fn main() -> Result<()> {
     let (notify_shutdown, mut _shutdown_rx) = broadcast::channel::<String>(1);
     let (shutdown_complete_tx, mut _shutdown_complete_rx) = mpsc::channel(1);
 
-    let mut server = Server::new(config, notify_shutdown, shutdown_complete_tx).await?;
+    let mut server = Server::new(config, protocol, notify_shutdown, shutdown_complete_tx).await?;
 
     loop {
         select! {

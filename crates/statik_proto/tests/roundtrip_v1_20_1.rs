@@ -9,7 +9,26 @@
 //! tests pin the state-aware dispatch behaviour.
 
 use statik_core::prelude::*;
-use statik_proto::prelude::*;
+use statik_proto::{
+    common::abilities,
+    v1_20_1::{
+        c2s::{
+            handshake::C2SHandshake,
+            login::C2SLoginStart,
+            play::{
+                C2SAcceptTeleportation, C2SClientInformation, C2SCustomPayload, C2SKeepAlive,
+                C2SPlayerPos, C2SPlayerPosRot, C2SPlayerRot,
+            },
+            status::{C2SPing, C2SStatusRequest},
+            C2SPacket,
+        },
+        s2c::{
+            login::S2CDisconnect,
+            play::{S2CGameEvent, S2CPlayerAbilities, S2CPlayerPosition},
+            S2CPacket,
+        },
+    },
+};
 use uuid::Uuid;
 
 fn encode<P: Packet>(packet: &P) -> Vec<u8> {
@@ -24,7 +43,7 @@ fn handshake_roundtrip() {
         protocol_version: VarInt(763),
         server_address: "example.com".to_string(),
         server_port: 25565,
-        next_state: State::Status,
+        next_state: ClientIntent::Status,
     };
     let buf = encode(&pkt);
 
@@ -34,7 +53,7 @@ fn handshake_roundtrip() {
             assert_eq!(h.protocol_version.0, 763);
             assert_eq!(h.server_address, "example.com");
             assert_eq!(h.server_port, 25565);
-            assert_eq!(h.next_state, State::Status);
+            assert_eq!(h.next_state, ClientIntent::Status);
         }
         other => panic!("expected Handshake, got {other:?}"),
     }
@@ -168,7 +187,6 @@ fn play_player_pos_roundtrip() {
 
 #[test]
 fn s2c_player_abilities_roundtrip() {
-    use statik_proto::s2c::play::abilities;
     let pkt = S2CPlayerAbilities {
         flags: abilities::INVULNERABLE | abilities::FLYING | abilities::CAN_FLY,
         flying_speed: 0.05,
@@ -388,7 +406,7 @@ fn f32_f64_roundtrip() {
 // the bytes are well-formed NBT / chunk data so the client won't choke on
 // them.
 
-use statik_proto::s2c::play;
+use statik_proto::v1_20_1::s2c::play;
 
 #[test]
 fn registry_payload_root_nbt_has_u16_name_length() {

@@ -89,14 +89,15 @@ impl std::fmt::Debug for StatusResponse {
 
 impl StatusResponse {
     pub fn new(
-        // version: Version,
+        version_name: impl Into<Cow<'static, str>>,
+        protocol: usize,
         players: Players,
         description: Chat,
         favicon: Option<String>,
         enforces_secure_chat: bool,
     ) -> Self {
         Self {
-            version: Version::default(),
+            version: Version::new(version_name, protocol),
             players,
             description,
             favicon: favicon.map(|data| format!("data:image/png;base64,{data}")),
@@ -130,15 +131,6 @@ impl Decode for StatusResponse {
 pub struct Version {
     name: Cow<'static, str>,
     protocol: usize,
-}
-
-impl Default for Version {
-    fn default() -> Self {
-        Self {
-            name: Cow::Borrowed(MINECRAFT_VERSION),
-            protocol: PROTOCOL_VERSION,
-        }
-    }
 }
 
 impl Version {

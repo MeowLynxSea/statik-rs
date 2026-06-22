@@ -8,11 +8,18 @@ use tokio::{
     sync::{broadcast, mpsc, RwLock},
 };
 
-use crate::{config::ServerConfig, connection::Connection, handler::Handler, shutdown::Shutdown};
+use crate::{
+    config::ServerConfig, connection::Connection, handler::Handler, protocol::ProtocolKind,
+    shutdown::Shutdown,
+};
 
 pub struct Server {
     /// Configuration for how the server should be run.
     pub config: Arc<RwLock<ServerConfig>>,
+
+    /// Selected Minecraft protocol version (from `--mc-version` / `[mc]
+    /// version`). Cloned (Copy) into every accepted connection.
+    pub protocol: ProtocolKind,
 
     /// Minecraft TCP listener that the server will bind and accept minecraft
     /// client connections from. Set by the `config.general.host` and
@@ -52,6 +59,7 @@ pub struct Server {
 impl Server {
     pub async fn new(
         mut config: ServerConfig,
+        protocol: ProtocolKind,
         notify_shutdown: broadcast::Sender<String>,
         shutdown_complete_tx: mpsc::Sender<String>,
     ) -> Result<Self> {
@@ -76,12 +84,14 @@ impl Server {
         let config = Arc::new(RwLock::new(config));
 
         info!(
-            "Statik server is up! Broadcasting the mc server on {mc_address}, and the api server \
-             on {api_address}."
+            "Statik server is up! Broadcasting the mc server ({}) on {mc_address}, and the api \
+             server on {api_address}.",
+            protocol.minecraft_version()
         );
 
         Ok(Self {
             config,
+            protocol,
             mc_listener,
             api_listener,
             notify_shutdown,
@@ -102,9 +112,11 @@ impl Server {
                             let shutdown = Shutdown::new(self.notify_shutdown.subscribe());
 
                             let config = self.config.clone();
+                            let protocol = self.protocol;
 
                             tokio::spawn(async move {
-                                let connection = Connection::new(config, stream, address).await;
+                                let connection =
+                                    Connection::new(config, protocol, stream, address).await;
 
                                 if let Err(err) = Handler::new(connection, shutdown, shutdown_complete_tx).await.run().await {
                                     error!("Connection error: {err:#}");
