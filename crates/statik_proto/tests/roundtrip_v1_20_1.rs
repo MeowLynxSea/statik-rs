@@ -446,7 +446,7 @@ fn registry_payload_contains_required_registries() {
 
 #[test]
 fn void_chunk_payload_has_correct_layout() {
-    let bytes = play::void_chunk_bytes();
+    let bytes = play::void_chunk_bytes_v1_20_1();
 
     // First 4 bytes: chunk x coordinate (i32 BE) — should be 0.
     assert_eq!(&bytes[..4], &[0, 0, 0, 0]);
@@ -467,7 +467,7 @@ fn void_chunk_payload_has_correct_layout() {
 
 #[test]
 fn void_chunk_payload_heightmaps_use_i32_lengths() {
-    let bytes = play::void_chunk_bytes();
+    let bytes = play::void_chunk_bytes_v1_20_1();
 
     // Each Long_Array entry has a u16 name followed by an i32 BE length.
     // For 256 longs the i32 BE is "0x00 0x00 0x01 0x00" (4 bytes).

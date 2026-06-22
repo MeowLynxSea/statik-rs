@@ -1,7 +1,6 @@
-//! The JSON body of `S2CStatusResponse`. Identical to the 1.20.1
-//! representation; the version name / protocol number are supplied at
-//! construction time (not from compile-time constants), so the same struct
-//! serves every supported MC version.
+//! The JSON body of `S2CStatusResponse`. The version name / protocol
+//! number are supplied at construction time (not from compile-time
+//! constants), so the same struct serves every supported MC version.
 
 use std::borrow::Cow;
 

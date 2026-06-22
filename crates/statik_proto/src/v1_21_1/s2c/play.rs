@@ -1,24 +1,20 @@
 //! Server-to-client packets in the Play state (1.21.1, protocol 767).
 //!
-//! All packet ids shifted from 1.20.1 due to inserted packets earlier in the
-//! table. Most of the field structure of the limbo-bound packets (GameEvent,
-//! KeepAlive, PlayerPosition, PlayerAbilities, LevelChunkWithLight,
-//! SetChunkCacheCenter, SetChunkCacheRadius, SetDefaultSpawnPosition) is
-//! largely unchanged.
-//!
-//! The big shape change is [`S2CLogin`] (0x2B): the 1.20.1 `registry_holder`
-//! is gone (the registry now arrives during Configuration via
-//! `S2CRegistryData`), `gameType` / `previousGameType` collapse into the
+//! Field structure of the limbo-bound packets (GameEvent, KeepAlive,
+//! PlayerPosition, PlayerAbilities, LevelChunkWithLight, SetChunkCacheCenter,
+//! SetChunkCacheRadius, SetDefaultSpawnPosition) is the canonical 1.21.1
+//! shape. The [`S2CLogin`] packet's registry arrives during Configuration
+//! via `S2CRegistryData`; `gameType` / `previousGameType` live in the
 //! inner [`SpawnInfo`] sub-struct ("CommonPlayerSpawnInfo" in Mojang
-//! source), and new fields (`doLimitedCrafting`, `enforcesSecureChat`,
-//! `portalCooldown`) appear. The full field layout is captured below from
+//! source), and new fields (`do_limited_crafting`, `enforces_secure_chat`,
+//! `portal_cooldown`) appear. The full field layout is captured below from
 //! PrismarineJS protocol.json (`play.toClient.packet_login` + the
 //! `SpawnInfo` type).
 
 use statik_core::prelude::*;
 use statik_derive::*;
 
-/// 0x1A - Disconnect (Play).
+/// 0x1A - Disconnect.
 #[derive(Debug, Packet)]
 #[packet(id = 0x1A, state = State::Play)]
 pub struct S2CDisconnectPlay {
@@ -27,8 +23,8 @@ pub struct S2CDisconnectPlay {
 
 /// 0x22 - Game Event.
 ///
-/// `event = 7` (START_WAITING_FOR_LEVELS) in 1.21.1. The field is sent on
-/// the wire as a `VarInt`-sized integer (Mojang serialises the enum via
+/// `event = 7` (START_WAITING_FOR_LEVELS) is sent on the wire as a
+/// `VarInt`-sized integer (Mojang serialises the enum via
 /// `FriendlyByteBuf.writeVarInt`).
 #[derive(Debug, Packet)]
 #[packet(id = 0x22, state = State::Play)]
@@ -37,25 +33,26 @@ pub struct S2CGameEvent {
     pub param: f32,
 }
 
-/// 0x26 - Keep Alive (Play).
+/// 0x26 - Keep Alive.
 #[derive(Debug, Packet)]
 #[packet(id = 0x26, state = State::Play)]
 pub struct S2CKeepAlive {
     pub id: i64,
 }
 
-/// 0x27 - Level Chunk With Light (Play).
+/// 0x27 - Level Chunk With Light.
 ///
-/// The 1.20.1 and 1.21.1 wire formats for this packet are identical
-/// (24-section paletted container overworld), so the precomputed body is
-/// built once in [`crate::common::void_chunk_bytes`] and reused.
+/// The precomputed body is built once in
+/// [`crate::common::void_chunk_bytes_v1_21_1`] and re-exported below.
+/// The 1.21.1 heightmaps field is an `anonymousNbt` (no u16 root-name
+/// prefix) — see the re-export docs.
 #[derive(Debug, Packet)]
 #[packet(id = 0x27, state = State::Play)]
 pub struct S2CLevelChunkWithLight {
     pub payload: RawBytes,
 }
 
-/// 0x2B - Login (Play, 1.21.1).
+/// 0x2B - Login.
 ///
 /// Full field layout (verified against PrismarineJS
 /// `tmp/minecraft-data/data/pc/1.21.1/protocol.json`,
@@ -73,8 +70,7 @@ pub struct S2CLevelChunkWithLight {
 /// 10. `world_state: SpawnInfo` (a nested container; see [`SpawnInfo`])
 /// 11. `enforces_secure_chat: bool`
 ///
-/// The 1.20.1 `registry_holder` is **gone** — registries arrive during
-/// Configuration via `S2CRegistryData` packets instead.
+/// Registries arrive during Configuration via `S2CRegistryData` packets.
 #[derive(Debug, Packet)]
 #[packet(id = 0x2B, state = State::Play)]
 pub struct S2CLogin {
@@ -128,11 +124,11 @@ pub struct DeathLocation {
     pub location: BlockPos,
 }
 
-/// 0x38 - Player Abilities (Play).
+/// 0x38 - Player Abilities.
 ///
-/// The `flags` byte is the same single-byte bitfield as 1.20.1: bit 0
-/// invulnerable, bit 1 flying, bit 2 can_fly, bit 3 instabuild. Use
-/// [`crate::common::abilities`] for the constants.
+/// `flags` is a single-byte bitfield: bit 0 invulnerable, bit 1 flying,
+/// bit 2 can_fly, bit 3 instabuild. Use [`crate::common::abilities`] for
+/// the constants.
 #[derive(Debug, Packet)]
 #[packet(id = 0x38, state = State::Play)]
 pub struct S2CPlayerAbilities {
@@ -141,7 +137,7 @@ pub struct S2CPlayerAbilities {
     pub walking_speed: f32,
 }
 
-/// 0x40 - Synchronize Player Position (Play).
+/// 0x40 - Synchronize Player Position.
 ///
 /// Sent once on login with `relative_arguments = 0` (absolute teleport).
 #[derive(Debug, Packet)]
@@ -156,7 +152,7 @@ pub struct S2CPlayerPosition {
     pub id: VarInt,
 }
 
-/// 0x54 - Set Chunk Cache Center (Play).
+/// 0x54 - Set Chunk Cache Center.
 #[derive(Debug, Packet)]
 #[packet(id = 0x54, state = State::Play)]
 pub struct S2CSetChunkCacheCenter {
@@ -164,14 +160,14 @@ pub struct S2CSetChunkCacheCenter {
     pub z: VarInt,
 }
 
-/// 0x55 - Set Chunk Cache Radius (Play).
+/// 0x55 - Set Chunk Cache Radius.
 #[derive(Debug, Packet)]
 #[packet(id = 0x55, state = State::Play)]
 pub struct S2CSetChunkCacheRadius {
     pub radius: VarInt,
 }
 
-/// 0x56 - Set Default Spawn Position (Play).
+/// 0x56 - Set Default Spawn Position.
 #[derive(Debug, Packet)]
 #[packet(id = 0x56, state = State::Play)]
 pub struct S2CSetDefaultSpawnPosition {
@@ -181,5 +177,11 @@ pub struct S2CSetDefaultSpawnPosition {
 
 // == Re-exports == \\
 
-/// Re-export of the shared void-chunk payload builder.
-pub use crate::common::void_chunk_bytes;
+/// Re-export of the 1.21.1-specific void-chunk payload builder. The
+/// 1.21.1 heightmaps field is an `anonymousNbt` (no u16 root-name
+/// prefix); using the wrong (named-NBT) builder makes the 1.21.1
+/// client fail decoding the packet with
+/// `Failed to decode packet 'clientbound/minecraft:level_chunk_with_light'`.
+/// See [`crate::common::void_chunk_bytes_v1_21_1`] for the full wire
+/// layout.
+pub use crate::common::void_chunk_bytes_v1_21_1;

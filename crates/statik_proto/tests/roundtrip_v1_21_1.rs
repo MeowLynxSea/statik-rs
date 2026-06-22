@@ -9,7 +9,7 @@
 
 use statik_core::prelude::*;
 use statik_proto::{
-    common::KnownPack,
+    common::{KnownPack, Tag, TagGroup},
     v1_21_1::{
         c2s::{
             configuration::{
@@ -24,7 +24,7 @@ use statik_proto::{
         s2c::{
             configuration::{
                 S2CConfigurationKeepAlive, S2CCustomPayload, S2CFeatureFlags,
-                S2CFinishConfiguration,
+                S2CFinishConfiguration, S2CUpdateTags,
             },
             login::S2CLoginSuccess,
             play::{S2CGameEvent, S2CLogin, S2CPlayerAbilities, S2CPlayerPosition},
@@ -272,6 +272,73 @@ fn s2c_configuration_finish_configuration_roundtrip() {
     let decoded =
         S2CPacketV1_21_1::decode_in_state(State::Configuration, &mut &buf[..]).expect("decode");
     assert!(matches!(decoded, S2CPacketV1_21_1::FinishConfiguration(_)));
+}
+
+#[test]
+fn s2c_configuration_update_tags_empty_roundtrip() {
+    // statik ships an empty tag list in production; this is the byte
+    // shape the vanilla client receives in limbo.
+    let pkt = S2CUpdateTags { tags: vec![] };
+    let buf = encode(&pkt);
+    // id 0x0D + VarInt(0) tag groups.
+    assert_eq!(buf, [0x0d, 0x00]);
+
+    let decoded =
+        S2CPacketV1_21_1::decode_in_state(State::Configuration, &mut &buf[..]).expect("decode");
+    match decoded {
+        S2CPacketV1_21_1::UpdateTags(u) => assert!(u.tags.is_empty()),
+        other => panic!("expected UpdateTags, got {other:?}"),
+    }
+}
+
+#[test]
+fn s2c_configuration_update_tags_nonempty_roundtrip() {
+    // Exhaustive roundtrip — verifies the nested Vec<TagGroup> /
+    // Vec<VarInt> wire shape (two registries × two tags × mixed id
+    // counts) decodes back to the same structure.
+    let pkt = S2CUpdateTags {
+        tags: vec![
+            TagGroup {
+                tag_type: "minecraft:block".to_string(),
+                tags: vec![
+                    Tag {
+                        name: "minecraft:stone".to_string(),
+                        entries: vec![VarInt(1), VarInt(2)],
+                    },
+                    Tag {
+                        name: "minecraft:dirt".to_string(),
+                        entries: vec![VarInt(3)],
+                    },
+                ],
+            },
+            TagGroup {
+                tag_type: "minecraft:item".to_string(),
+                tags: vec![Tag {
+                    name: "minecraft:pickaxes".to_string(),
+                    entries: vec![],
+                }],
+            },
+        ],
+    };
+    let buf = encode(&pkt);
+    assert_eq!(buf[0], 0x0d);
+
+    let decoded =
+        S2CPacketV1_21_1::decode_in_state(State::Configuration, &mut &buf[..]).expect("decode");
+    let decoded_tags = match decoded {
+        S2CPacketV1_21_1::UpdateTags(u) => u.tags,
+        other => panic!("expected UpdateTags, got {other:?}"),
+    };
+
+    assert_eq!(decoded_tags.len(), 2);
+    assert_eq!(decoded_tags[0].tag_type, "minecraft:block");
+    assert_eq!(decoded_tags[0].tags.len(), 2);
+    assert_eq!(decoded_tags[0].tags[0].name, "minecraft:stone");
+    assert_eq!(decoded_tags[0].tags[0].entries, vec![VarInt(1), VarInt(2)]);
+    assert_eq!(decoded_tags[0].tags[1].entries, vec![VarInt(3)]);
+    assert_eq!(decoded_tags[1].tag_type, "minecraft:item");
+    assert_eq!(decoded_tags[1].tags[0].name, "minecraft:pickaxes");
+    assert!(decoded_tags[1].tags[0].entries.is_empty());
 }
 
 #[test]
@@ -708,4 +775,134 @@ fn registry_blobs_parse_as_varint_count_plus_entries() {
             other => panic!("unknown NBT tag 0x{other:02X}"),
         }
     }
+}
+
+// == Precomputed void-chunk payload == \\
+
+/// The 1.21.1 heightmaps NBT is **anonymous** (no u16 length=0 root name
+/// prefix). The 1.20.1 payload writes a u16 length=0 root name right after
+/// the `0x0A` TAG_Compound tag byte; emitting that to a 1.21.1 client
+/// causes it to mis-parse the heightmaps and the entire packet downstream,
+/// which the client surfaces as
+/// `Failed to decode packet 'clientbound/minecraft:level_chunk_with_light'`.
+#[test]
+fn void_chunk_payload_uses_anonymous_heightmaps_nbt() {
+    use statik_proto::v1_21_1::s2c::play;
+    let bytes = play::void_chunk_bytes_v1_21_1();
+
+    // First 4 bytes: chunk x coordinate (i32 BE) — should be 0.
+    assert_eq!(&bytes[..4], &[0, 0, 0, 0]);
+    // Next 4 bytes: chunk z coordinate (i32 BE) — should be 0.
+    assert_eq!(&bytes[4..8], &[0, 0, 0, 0]);
+
+    // After x, z the heightmaps field begins. For 1.21.1 this is an
+    // anonymous TAG_Compound: tag byte `0x0A` followed directly by field
+    // entries — NO u16 length=0 root-name prefix (which is the 1.20.1
+    // shape).
+    assert_eq!(bytes[8], 0x0a, "heightmaps should start with TAG_Compound");
+    // The next byte after the tag byte must be a field-tag byte, not a
+    // zero root-name length. The first field is MOTION_BLOCKING, a
+    // TAG_Long_Array (0x0C).
+    assert_eq!(
+        bytes[9], 0x0c,
+        "expected MOTION_BLOCKING TAG_Long_Array (0x0C) immediately after the heightmaps tag byte \
+         — the 1.21.1 heightmaps is anonymous, so a u16 length=0 root-name prefix would be a \
+         1.20.1 leak",
+    );
+}
+
+/// Smoke test that the 1.21.1 payload decodes past the heightmaps and
+/// lands on the expected chunk-data length of 192 bytes (24 overworld
+/// sections × 8 bytes each = 2-byte block_count + 3-byte block-states
+/// paletted container + 3-byte biomes paletted container).
+///
+/// Walks the anonymous heightmaps compound by hand instead of hardcoding
+/// byte offsets, so it's robust to future changes in the heightmaps
+/// payload (e.g. renaming the two long arrays).
+#[test]
+fn void_chunk_payload_v1_21_1_top_level_shape() {
+    use std::io::{Cursor, Read};
+
+    use statik_proto::v1_21_1::s2c::play;
+    let bytes = play::void_chunk_bytes_v1_21_1();
+
+    let mut cur = Cursor::new(bytes);
+
+    // Skip x (4) and z (4).
+    let mut four = [0u8; 4];
+    cur.read_exact(&mut four).unwrap();
+    cur.read_exact(&mut four).unwrap();
+    assert_eq!(four, [0, 0, 0, 0]);
+    assert_eq!(
+        &cur.get_ref()[cur.position() as usize - 4..cur.position() as usize],
+        &[0, 0, 0, 0]
+    );
+
+    // Anonymous heightmaps TAG_Compound: read field entries until TAG_End.
+    let mut tag = [0u8; 1];
+    cur.read_exact(&mut tag).unwrap();
+    assert_eq!(tag[0], 0x0a, "heightmaps should start with TAG_Compound");
+    loop {
+        cur.read_exact(&mut tag).unwrap();
+        if tag[0] == 0x00 {
+            break;
+        }
+        // u16 name length + name bytes.
+        let mut nlen = [0u8; 2];
+        cur.read_exact(&mut nlen).unwrap();
+        let n = u16::from_be_bytes(nlen) as usize;
+        let mut name = vec![0u8; n];
+        cur.read_exact(&mut name).unwrap();
+        // Skip the field payload based on its tag.
+        match tag[0] {
+            0x0c => {
+                // TAG_Long_Array: i32 BE length, then `length * 8` bytes.
+                let mut lbuf = [0u8; 4];
+                cur.read_exact(&mut lbuf).unwrap();
+                let l = i32::from_be_bytes(lbuf) as usize;
+                let mut sink = vec![0u8; l * 8];
+                cur.read_exact(&mut sink).unwrap();
+            }
+            other => panic!("unexpected NBT tag 0x{other:02X} in heightmaps"),
+        }
+    }
+
+    // Chunk data length: VarInt(192) = [0xC0, 0x01] (2 bytes — 192 >= 128).
+    let mut v1 = [0u8; 1];
+    cur.read_exact(&mut v1).unwrap();
+    assert_eq!(v1[0] & 0x80, 0x80, "192 should encode as a 2-byte VarInt");
+    let mut v2 = [0u8; 1];
+    cur.read_exact(&mut v2).unwrap();
+    let chunk_data_len = ((v1[0] & 0x7f) as i32) | ((v2[0] as i32) << 7);
+    assert_eq!(
+        chunk_data_len, 192,
+        "chunk data buffer should be 192 bytes (24 sections × 8 bytes)"
+    );
+
+    // Skip the chunk data and the block-entities count (VarInt 0).
+    let mut sink = vec![0u8; 192];
+    cur.read_exact(&mut sink).unwrap();
+    let mut be = [0u8; 1];
+    cur.read_exact(&mut be).unwrap();
+    assert_eq!(be[0], 0x00, "block entities count should be 0");
+
+    // Four empty light masks + two empty light-update arrays.
+    for label in [
+        "skyLightMask",
+        "blockLightMask",
+        "emptySkyLightMask",
+        "emptyBlockLightMask",
+        "skyLight",
+        "blockLight",
+    ] {
+        cur.read_exact(&mut be).unwrap();
+        assert_eq!(be[0], 0x00, "{label} should be an empty i64[]varint");
+    }
+
+    // And that should be the entire payload.
+    assert_eq!(
+        cur.position() as usize,
+        bytes.len(),
+        "no trailing bytes expected"
+    );
 }

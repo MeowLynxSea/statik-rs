@@ -3,10 +3,9 @@ use statik_derive::*;
 
 /// 0x00 - Handshake.
 ///
-/// Wire fields and types are unchanged 1.20.1 → 1.21.1, but the
-/// `next_state` / `intention` enum grew a `Transfer = 3` arm in 1.21+.
-/// statik only handles `Status` and `Login`; `Transfer` is rejected at the
-/// handshake handler.
+/// `next_state` / `intention` is a [`ClientIntent`]: `Status = 1`,
+/// `Login = 2`, `Transfer = 3`. statik only handles `Status` and `Login`;
+/// `Transfer` is rejected at the handshake handler.
 #[derive(Debug, Packet)]
 #[packet(id = 0x00, state = State::Handshake)]
 pub struct C2SHandshake {

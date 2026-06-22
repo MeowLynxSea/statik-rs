@@ -1,6 +1,4 @@
-//! Server-to-client packets in the Login state (1.21.1).
-//!
-//! Wire format is unchanged from 1.20.1 for these packets.
+//! Server-to-client packets in the Login phase (1.21.1, protocol 767).
 
 use statik_core::prelude::*;
 use statik_derive::*;

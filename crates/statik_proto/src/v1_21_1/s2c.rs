@@ -31,6 +31,7 @@ pub enum S2CPacket {
     PingConfiguration(S2CPingConfiguration),
     RegistryData(S2CRegistryData),
     FeatureFlags(S2CFeatureFlags),
+    UpdateTags(S2CUpdateTags),
     KnownPacks(S2CKnownPacks),
 
     // Play (limbo only)

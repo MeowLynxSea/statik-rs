@@ -108,8 +108,7 @@ pub struct S2CPlayerAbilities {
 
 /// Bit flags for [`S2CPlayerAbilities::flags`].
 ///
-/// Re-exported from [`crate::common::abilities`] (shared across versions — the
-/// single-byte bitfield format is unchanged 1.20.1 → 1.21.1).
+/// Re-exported from [`crate::common::abilities`].
 pub use crate::common::abilities;
 
 /// 0x3C - Synchronize Player Position Packet (S ➔ C).
@@ -168,12 +167,13 @@ pub struct S2CSetDefaultSpawnPosition {
 
 // == Precomputed payloads == \\
 
-/// Body of `S2CLevelChunkWithLight` for a single empty air chunk at (0,0).
-///
-/// The 1.20.1 and 1.21.1 chunk wire formats are identical (24-section paletted
-/// container overworld), so this payload is built once in [`crate::common`]
-/// and shared. See `common::void_chunk_bytes` for the wire layout.
-pub use crate::common::void_chunk_bytes;
+/// Body of `S2CLevelChunkWithLight` (1.20.1) for a single empty air chunk at
+/// (0,0). The 1.20.1 heightmaps is a **named** TAG_Compound (u16 length=0
+/// root name); other protocol versions use a different shape — use the
+/// per-version re-export from that version's `s2c::play` module, not this
+/// one. See [`crate::common::void_chunk_bytes_v1_20_1`] for the full wire
+/// layout.
+pub use crate::common::void_chunk_bytes_v1_20_1;
 
 /// Body of the `registryHolder` field of `S2CLogin`: the complete vanilla
 /// 1.20.1 `RegistryAccess$Frozen` network codec, embedded verbatim as NBT.

@@ -1,8 +1,8 @@
-//! Client-to-server packets in the Configuration state (1.21.1+).
+//! Client-to-server packets in the Configuration phase (1.21.1, protocol 767).
 //!
-//! Configuration is the post-`LoginSuccess` / pre-`Play` state introduced in
-//! 1.20.2. statik uses it to negotiate features / known packs / registries
-//! before transitioning the client into Play.
+//! Configuration is the post-`LoginSuccess` / pre-Play phase statik uses to
+//! negotiate features / known packs / registries before transitioning the
+//! client into Play.
 
 use statik_core::prelude::*;
 use statik_derive::*;
@@ -13,8 +13,7 @@ use crate::common::KnownPack;
 /// 0x00 - Client Information (client settings).
 ///
 /// `view_distance` is a single signed byte; `chat_mode` / `main_hand` are
-/// `VarInt`; `skin_parts` is a `u8` bitmask. (In 1.20.1 this was a Play-state
-/// packet; 1.21.1 moved it here.)
+/// `VarInt`; `skin_parts` is a `u8` bitmask.
 #[derive(Debug, Packet)]
 #[packet(id = 0x00, state = State::Configuration)]
 pub struct C2SClientInformation {
@@ -28,7 +27,7 @@ pub struct C2SClientInformation {
     pub allows_listing: bool,
 }
 
-/// 0x01 - Cookie Response (Configuration).
+/// 0x01 - Cookie Response.
 #[derive(Debug, Packet)]
 #[packet(id = 0x01, state = State::Configuration)]
 pub struct C2SCookieResponse {
@@ -55,8 +54,8 @@ pub struct C2SFinishConfiguration {}
 
 /// 0x04 - Keep Alive (Configuration).
 ///
-/// Note: Configuration C2S KeepAlive carries `id: i64`, **not** a VarInt —
-/// this is the opposite of the S2C variant (which is `VarInt`).
+/// `id` is 8-byte signed BE (i64) — opposite of the S2C variant
+/// (Configuration `S2CConfigurationKeepAlive` is a `VarInt`).
 #[derive(Debug, Packet)]
 #[packet(id = 0x04, state = State::Configuration)]
 pub struct C2SConfigurationKeepAlive {

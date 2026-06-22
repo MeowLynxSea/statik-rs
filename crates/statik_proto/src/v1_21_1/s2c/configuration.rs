@@ -1,6 +1,5 @@
-//! Server-to-client packets in the Configuration state (1.21.1).
+//! Server-to-client packets in the Configuration phase (1.21.1, protocol 767).
 //!
-//! Configuration was introduced in 1.20.2 and is fully realised in 1.21.1.
 //! The limbo flow uses a small subset of these packets to drive the client
 //! from `Login Acknowledged` through `Finish Configuration`:
 //!
@@ -8,14 +7,17 @@
 //! 2. `S2CFeatureFlags` (0x0C) — `["minecraft:vanilla", ...]`
 //! 3. `S2CRegistryData` (0x07) × N — one per registry (placeholder payloads in
 //!    stage 2; real data in stage 3)
-//! 4. `S2CKnownPacks` (0x0E) — vanilla datapack list
-//! 5. (wait for `C2SFinishConfiguration`)
-//! 6. `S2CFinishConfiguration` (0x03) — transition to Play
+//! 4. `S2CUpdateTags` (0x0D) — required by the vanilla client to leave
+//!    Configuration; sent with an empty tag list (limbo has no tag-driven
+//!    behaviour)
+//! 5. `S2CKnownPacks` (0x0E) — vanilla datapack list
+//! 6. (wait for `C2SFinishConfiguration`)
+//! 7. `S2CFinishConfiguration` (0x03) — transition to Play
 
 use statik_core::prelude::*;
 use statik_derive::*;
 
-use crate::common::KnownPack;
+use crate::common::{KnownPack, TagGroup};
 
 /// 0x01 - Custom Payload (plugin message, e.g. `minecraft:brand`).
 ///
@@ -37,7 +39,7 @@ pub struct S2CDisconnectConfiguration {
 /// 0x03 - Finish Configuration.
 ///
 /// The server sends this in response to `C2SFinishConfiguration` to
-/// transition the client to Play state.
+/// transition the client to Play.
 #[derive(Debug, Packet)]
 #[packet(id = 0x03, state = State::Configuration)]
 /// _no fields._
@@ -104,6 +106,26 @@ pub struct S2CRegistryData {
 #[packet(id = 0x0C, state = State::Configuration)]
 pub struct S2CFeatureFlags {
     pub features: Vec<String>,
+}
+
+/// 0x0D - Update Tags.
+///
+/// Lists every tag definition the server knows about, grouped by registry
+/// (block, item, fluid, entity_type, ...). The vanilla client requires
+/// this packet during Configuration — without it, the client never sends
+/// `FinishConfiguration` and the connection stalls on "Joining World"
+/// (the limbo Play burst never gets dispatched). The packet can be sent
+/// with an empty `tags` list: the client only needs to receive it to
+/// consider Configuration complete.
+///
+/// statik ships an empty tag list because the limbo world has no
+/// tag-driven behaviour; replacing it with real tag data is a future
+/// concern and would not require any structural change beyond the
+/// `tags` field on this struct.
+#[derive(Debug, Packet)]
+#[packet(id = 0x0D, state = State::Configuration)]
+pub struct S2CUpdateTags {
+    pub tags: Vec<TagGroup>,
 }
 
 /// 0x0E - Known Packs.

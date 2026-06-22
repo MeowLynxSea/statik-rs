@@ -9,7 +9,7 @@ use statik_core::prelude::*;
 use statik_proto::{
     common::{abilities, KnownPack},
     v1_20_1::{c2s::C2SPacket as C2SPacketV1_20_1, s2c::play::S2CKeepAlive as S2CKeepAliveV1_20_1},
-    v1_21_1::c2s::C2SPacket as C2SPacketV1_21_1,
+    v1_21_1::{c2s::C2SPacket as C2SPacketV1_21_1, s2c::play::S2CKeepAlive as S2CKeepAliveV1_21_1},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufWriter},
@@ -174,10 +174,20 @@ impl Connection {
                         "sending keepalive id {id} to {} (Play keepalive timer)",
                         self.address
                     );
-                    // KeepAlive wire format is identical in 1.20.1 and 1.21.1
-                    // (`id: i64`); use the 1.20.1 struct since it is
-                    // protocol-equivalent.
-                    self.write_packet(S2CKeepAliveV1_20_1 { id }).await?;
+                    // The KeepAlive wire payload (`id: i64`) is identical
+                    // in 1.20.1 and 1.21.1, but the **packet id** is not:
+                    // 1.20.1 = 0x23, 1.21.1 = 0x26 (which is `Horse Screen
+                    // Open` in 1.20.1). Always use the per-version struct
+                    // so the 1.21.1 client doesn't try to decode our
+                    // keepalive as a Horse Screen Open packet.
+                    match self.protocol {
+                        ProtocolKind::V1_20_1(_) => {
+                            self.write_packet(S2CKeepAliveV1_20_1 { id }).await?;
+                        }
+                        ProtocolKind::V1_21_1(_) => {
+                            self.write_packet(S2CKeepAliveV1_21_1 { id }).await?;
+                        }
+                    }
                 }
             }
         }
@@ -472,9 +482,9 @@ impl Connection {
                 use statik_proto::v1_20_1::s2c::{
                     login::{S2CDisconnect, S2CLoginSuccess, S2CSetCompression},
                     play::{
-                        registry_bytes, void_chunk_bytes, S2CGameEvent, S2CLevelChunkWithLight,
-                        S2CLogin, S2CPlayerAbilities, S2CPlayerPosition, S2CSetChunkCacheCenter,
-                        S2CSetChunkCacheRadius, S2CSetDefaultSpawnPosition,
+                        registry_bytes, void_chunk_bytes_v1_20_1, S2CGameEvent,
+                        S2CLevelChunkWithLight, S2CLogin, S2CPlayerAbilities, S2CPlayerPosition,
+                        S2CSetChunkCacheCenter, S2CSetChunkCacheRadius, S2CSetDefaultSpawnPosition,
                     },
                 };
                 match p {
@@ -556,7 +566,7 @@ impl Connection {
                         })
                         .await?;
                         self.write_packet(S2CLevelChunkWithLight {
-                            payload: RawBytes(void_chunk_bytes().to_vec().into()),
+                            payload: RawBytes(void_chunk_bytes_v1_20_1().to_vec().into()),
                         })
                         .await?;
                         self.write_packet(S2CSetDefaultSpawnPosition {
@@ -616,7 +626,7 @@ impl Connection {
             DecodedC2S::V1_21_1(p) => {
                 use statik_proto::v1_21_1::s2c::{
                     login::{S2CDisconnect, S2CLoginSuccess, S2CSetCompression},
-                    play::void_chunk_bytes as void_chunk_bytes_v1_21_1,
+                    play::void_chunk_bytes_v1_21_1,
                 };
                 match p {
                     C2SPacketV1_21_1::Hello(hello) => {
@@ -729,8 +739,12 @@ impl Connection {
                 Ok(())
             }
             C2SPacketV1_21_1::FinishConfigurationAck(_) => {
-                // Send the echo, transition to Play, emit the 1.21.1 burst.
-                self.write_packet(S2CFinishConfiguration {}).await?;
+                // The client has acked our `S2CFinishConfiguration` (sent
+                // in `send_configuration_burst`); transition to Play and
+                // emit the 1.21.1 Play burst. The `S2CFinishConfiguration`
+                // itself is no longer echoed here — the server-driven one
+                // is what unblocks the client, and resending it now would
+                // be a no-op duplicate.
                 self.state = State::Play;
                 self.send_play_burst_v1_21_1().await?;
                 Ok(())
@@ -774,7 +788,8 @@ impl Connection {
     /// with real 1.21.1 server captures.
     async fn send_configuration_burst(&mut self) -> Result<()> {
         use statik_proto::v1_21_1::s2c::configuration::{
-            S2CCustomPayload, S2CFeatureFlags, S2CKnownPacks, S2CRegistryData,
+            S2CCustomPayload, S2CFeatureFlags, S2CFinishConfiguration, S2CKnownPacks,
+            S2CRegistryData, S2CUpdateTags,
         };
 
         // 1. Server brand via the "minecraft:brand" plugin channel.
@@ -813,7 +828,15 @@ impl Connection {
             .await?;
         }
 
-        // 4. Known packs — the vanilla core pack. (Stage 2: ship a single
+        // 4. Update Tags — required by the vanilla 1.21.1 client to
+        // complete Configuration. Without this packet the client never
+        // sends `FinishConfiguration` (0x03) and the connection stalls on
+        // "Joining World" (the limbo Play burst is gated on the client's
+        // `FinishConfigurationAck`). The list can be empty: statik's
+        // limbo world has no tag-driven behaviour.
+        self.write_packet(S2CUpdateTags { tags: vec![] }).await?;
+
+        // 5. Known packs — the vanilla core pack. (Stage 2: ship a single
         // known pack so the client can complete the handshake; the
         // version string is best-effort and may need verification in
         // stage 3 against a real 1.21.1 server.)
@@ -825,6 +848,17 @@ impl Connection {
             }],
         })
         .await?;
+
+        // 6. Finish Configuration (S2C 0x03) — signals to the client that
+        // the server is done with the Configuration handshake. The vanilla
+        // 1.21.1 client only sends its `C2SFinishConfiguration` ack after
+        // receiving this packet; if we don't send it the client stays
+        // parked in Configuration state (visible to the user as
+        // "Joining World") and the connection eventually times out after
+        // ~30s of keepalive silence. `handle_configuration`'s
+        // `FinishConfigurationAck` arm performs the actual Play transition
+        // once that ack arrives.
+        self.write_packet(S2CFinishConfiguration {}).await?;
         Ok(())
     }
 
@@ -834,8 +868,8 @@ impl Connection {
     /// longer inline — it was streamed during Configuration).
     async fn send_play_burst_v1_21_1(&mut self) -> Result<()> {
         use statik_proto::v1_21_1::s2c::play::{
-            void_chunk_bytes, S2CGameEvent, S2CLevelChunkWithLight, S2CLogin, S2CPlayerAbilities,
-            S2CPlayerPosition, S2CSetChunkCacheCenter, S2CSetChunkCacheRadius,
+            void_chunk_bytes_v1_21_1, S2CGameEvent, S2CLevelChunkWithLight, S2CLogin,
+            S2CPlayerAbilities, S2CPlayerPosition, S2CSetChunkCacheCenter, S2CSetChunkCacheRadius,
             S2CSetDefaultSpawnPosition, SpawnInfo,
         };
 
@@ -902,9 +936,13 @@ impl Connection {
         })
         .await?;
 
-        // 3. Level Chunk With Light (0x27) — same wire format as 1.20.1.
+        // 3. Level Chunk With Light (0x27). 1.21.1 uses an anonymous NBT
+        // for the heightmaps field (no u16 root-name prefix); the
+        // 1.20.1-shaped payload makes the 1.21.1 client fail decoding
+        // with `Failed to decode packet
+        // 'clientbound/minecraft:level_chunk_with_light'`.
         self.write_packet(S2CLevelChunkWithLight {
-            payload: RawBytes(void_chunk_bytes().to_vec().into()),
+            payload: RawBytes(void_chunk_bytes_v1_21_1().to_vec().into()),
         })
         .await?;
 
