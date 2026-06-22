@@ -35,7 +35,7 @@ pub struct McServerConfig {
     /// Target Minecraft version to serve. Accepts a version string
     /// (`"1.20.1"`, `"1.21.1"`) or a protocol number (`"763"`, `"767"`).
     /// Defaults to `"1.20.1"`.
-    pub version: Option<String>,
+    pub version: String,
 
     /// How many players can join the server at once. Defaults to 20.
     ///
@@ -93,7 +93,7 @@ impl Default for McServerConfig {
         Self {
             max_packet_size: 4096,
             port: 25565,
-            version: None,
+            version: "1.20.1".to_string(),
             max_players: 20,
             hide_player_count: false,
             motd: "A Statik server!".to_string(),

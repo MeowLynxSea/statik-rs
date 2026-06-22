@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
 
     // Select the Minecraft protocol version from the `[mc] version`
     // config field. Defaults to "1.20.1".
-    let version_str = config.mc.version.as_deref().unwrap_or("1.20.1");
+    let version_str = config.mc.version.as_str();
     let protocol = match version_str.parse::<ProtocolKind>() {
         Ok(p) => p,
         Err(e) => {
