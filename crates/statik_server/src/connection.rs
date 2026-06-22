@@ -56,8 +56,8 @@ pub struct Connection {
     config: Arc<RwLock<ServerConfig>>,
 
     /// The selected Minecraft protocol version for this connection. Set at
-    /// accept time from the server's configured `--mc-version` and carried for
-    /// the connection's lifetime; decode/dispatch route through it.
+    /// accept time from the server's `[mc] version` config field and carried
+    /// for the connection's lifetime; decode/dispatch route through it.
     pub protocol: ProtocolKind,
 
     // /// All the data accociated with the client after they have connected, including

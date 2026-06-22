@@ -17,8 +17,8 @@ pub struct Server {
     /// Configuration for how the server should be run.
     pub config: Arc<RwLock<ServerConfig>>,
 
-    /// Selected Minecraft protocol version (from `--mc-version` / `[mc]
-    /// version`). Cloned (Copy) into every accepted connection.
+    /// Selected Minecraft protocol version (from `[mc] version` config
+    /// field). Cloned (Copy) into every accepted connection.
     pub protocol: ProtocolKind,
 
     /// Minecraft TCP listener that the server will bind and accept minecraft

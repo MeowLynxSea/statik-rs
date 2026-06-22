@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **Appear online** when queried — responds to status pings with the configured MOTD / icon / player count.
 2. **Accept logins into a "limbo" world** — when a client connects and logs in, instead of disconnecting them, statik transitions them into the Play state in a void world at a fixed position with `isFlying=true`. This lets the actual Java server start on demand while clients are already connected and waiting.
 
-statik supports **multiple Minecraft protocol versions at once** — both versions' packet definitions are compiled into the binary, and the version is selected per-process via the `--mc-version` CLI flag (or the `[mc] version` config field). The default is 1.20.1 / protocol 763. The currently supported versions are 1.20.1 and 1.21.1.
+statik supports **multiple Minecraft protocol versions at once** — both versions' packet definitions are compiled into the binary, and the version is selected per-process via the `[mc] version` field in `statik.toml`. The default is 1.20.1 / protocol 763. The currently supported versions are 1.20.1 and 1.21.1.
 
 Limbo behavior is **unconditional**: every successful login transitions the client into Play state. There is no `enabled` flag — see [Limbo behavior](#limbo-behavior) below for details.
 

@@ -26,6 +26,15 @@ $ cargo run
 
 various settings can be configured through the `statik.toml` file - this can be provided in whatever directory the run command was executed in, or will be automatically generated if it doesn't yet exist.
 
+To select which Minecraft protocol version to serve, set `[mc] version` in `statik.toml`:
+
+```toml
+[mc]
+version = "1.21.1"  # or "1.20.1", or the protocol number "763" / "767"
+```
+
+The default is `1.20.1`.
+
 Or change the path of the config file:
 ```bash
 $ cargo run -- --config=path/to/my_config_file.toml

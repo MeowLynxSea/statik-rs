@@ -1,7 +1,7 @@
 //! Runtime protocol-version dispatch.
 //!
 //! statik supports multiple Minecraft protocol versions compiled into a single
-//! binary. The selected version (set via `--mc-version` / `[mc] version`) is
+//! binary. The selected version (set via the `[mc] version` config field) is
 //! carried by [`ProtocolKind`] on each `Connection`; every version-sensitive
 //! operation decodes / routes through a `match` on it.
 //!
